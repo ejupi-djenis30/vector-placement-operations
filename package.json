@@ -1,0 +1,27 @@
+{
+  "name": "vector-placement-operations",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "An interactive placement operations workspace built with synthetic data and local-only browser storage.",
+  "homepage": "https://ejupi-djenis30.github.io/vector-placement-operations/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ejupi-djenis30/vector-placement-operations.git"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "placement-management",
+    "operations-dashboard",
+    "privacy-by-design",
+    "synthetic-data"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "check:site": "node scripts/validate-site.mjs",
+    "check": "npm test && npm run check:site"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
