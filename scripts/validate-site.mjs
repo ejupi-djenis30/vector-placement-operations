@@ -74,7 +74,12 @@ assert(
   "Fixture data must not contain contact or credential fields.",
 );
 assert(!/(?:src|href)="\//.test(html), "Site assets must remain relative to the Pages project root.");
-assert(html.includes(PAGE_URL) && readme.includes(PAGE_URL), "The public Pages URL must appear in the site metadata and README.");
+const readmeLinks = [...readme.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)]
+  .map(([, link]) => new URL(link).href);
+assert(
+  readmeLinks.some((link) => link === PAGE_URL),
+  "The public Pages URL must appear as an exact README link destination.",
+);
 
 assert(
   /<svg\b[^>]*\bwidth="1200"[^>]*\bheight="630"[^>]*\bviewBox="0 0 1200 630"/i.test(socialPreview),
