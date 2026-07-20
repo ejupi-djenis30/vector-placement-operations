@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/ejupi-djenis30/vector-placement-operations.git"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "keywords": [
     "placement-management",
     "operations-dashboard",

@@ -47,4 +47,4 @@ Live app: [ejupi-djenis30.github.io/vector-placement-operations](https://ejupi-d
 
 ## License
 
-No license is granted by this repository. Viewing or running the public app does not grant permission to copy, modify or distribute the code. Contact the contributors before reusing it.
+Released under the [MIT License](LICENSE).
