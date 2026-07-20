@@ -37,7 +37,7 @@ Then open `http://127.0.0.1:8000`.
 
 VECTOR began as a 2023 academic team project. This edition keeps the original product problem and rebuilds the application around fictional records, a browser-only data model and a deliberately small attack surface.
 
-The original work was created by Djenis Ejupi with project collaborators. The contributors approved publication of this reconstructed edition.
+The original team was Djenis Ejupi and project contributors. The contributors approved publication of this reconstructed edition.
 
 ## Deployment
 

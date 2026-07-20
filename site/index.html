@@ -30,6 +30,7 @@
     <title>VECTOR — Placement Operations</title>
   </head>
   <body>
+    <a class="skip-link" href="#top">Skip to content</a>
     <header class="header">
       <a class="brand" href="#top" aria-label="VECTOR home">
         <img src="assets/vector-mark.svg" width="42" height="42" alt="" />
@@ -43,7 +44,7 @@
       <span class="source">Live demo</span>
     </header>
 
-    <main id="top">
+    <main id="top" tabindex="-1">
       <section class="hero">
         <div class="hero-copy">
           <p class="eyebrow"><span>01</span> Placement operations, without the spreadsheet fog</p>
@@ -64,15 +65,39 @@
         </div>
         <div class="hero-board" aria-hidden="true">
           <div class="board-grid"></div>
-          <p class="board-label">PLACEMENT MAP / 2026</p>
-          <div class="orbit orbit-a"></div>
-          <div class="orbit orbit-b"></div>
-          <div class="node node-a"><b>STUDENT</b><span>LEA D.</span></div>
-          <div class="node node-b"><b>HOST</b><span>ATLAS</span></div>
-          <div class="node node-c"><b>MENTOR</b><span>MINA P.</span></div>
-          <div class="route route-a"></div>
-          <div class="route route-b"></div>
-          <div class="progress-stamp">40%<small>72 / 180 H</small></div>
+          <div class="board-frame">
+            <div class="board-header">
+              <span>PLACEMENT / PL-101</span>
+              <span><i></i> IN PROGRESS</span>
+            </div>
+            <div class="placement-flow">
+              <div class="flow-line"></div>
+              <article class="flow-step">
+                <span class="step-index">01</span>
+                <small>STUDENT</small>
+                <strong>LEA D.</strong>
+                <b>MATCHED</b>
+              </article>
+              <article class="flow-step">
+                <span class="step-index">02</span>
+                <small>HOST</small>
+                <strong>ATLAS</strong>
+                <b>ACTIVE</b>
+              </article>
+              <article class="flow-step">
+                <span class="step-index">03</span>
+                <small>MENTOR</small>
+                <strong>MINA P.</strong>
+                <b>CHECK-IN</b>
+              </article>
+            </div>
+            <div class="progress-panel">
+              <div class="progress-heading"><span>PLACEMENT PROGRESS</span><strong>40%</strong></div>
+              <div class="progress-rail"><span></span></div>
+              <div class="progress-scale"><span>0 H</span><b>72 H LOGGED</b><span>180 H</span></div>
+            </div>
+            <p class="board-foot">LOCAL WORKSPACE / SYNTHETIC COHORT</p>
+          </div>
         </div>
       </section>
 
