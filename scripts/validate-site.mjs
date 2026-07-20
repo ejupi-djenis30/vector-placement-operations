@@ -130,14 +130,14 @@ assert(
 
 assert(packageJson.name === "vector-placement-operations", "package.json must use the VECTOR package name.");
 assert(packageJson.homepage === PAGE_URL, "package.json must declare the public homepage.");
-assert(packageJson.license === "UNLICENSED", "package.json must preserve the no-license status.");
-assert(/No license is granted by this repository\./i.test(readme), "README.md must state that no license is granted.");
-assert(!/\bMIT License\b/i.test(presentationText), "The repository must not claim an MIT license.");
+assert(packageJson.license === "MIT", "package.json must declare the MIT license.");
+assert(/Released under the \[MIT License\]\(LICENSE\)\./i.test(readme), "README.md must link to the MIT license.");
+assert(/\bMIT License\b/i.test(presentationText), "The public presentation must state the MIT license.");
 
 const rootEntries = await readdir(repositoryRoot, { withFileTypes: true });
 assert(
-  !rootEntries.some((entry) => entry.isFile() && /^licen[cs]e(?:\.|$)/i.test(entry.name)),
-  "A license file is present even though the project is unlicensed.",
+  rootEntries.some((entry) => entry.isFile() && /^licen[cs]e(?:\.|$)/i.test(entry.name)),
+  "The MIT license file is missing.",
 );
 
 const workflowRoot = new URL(".github/workflows/", repositoryRoot);
