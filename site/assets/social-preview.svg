@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">VECTOR — Every placement, one clear picture</title>
+  <desc id="description">A navy and cream preview of the VECTOR placement operations workspace.</desc>
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#17324d" stroke-opacity=".07" />
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#10263a" flood-opacity=".2" />
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="#f5efe5" />
+  <rect width="1200" height="630" fill="url(#grid)" />
+  <rect x="0" y="0" width="18" height="630" fill="#bc3c2c" />
+
+  <g transform="translate(78 70)">
+    <rect width="82" height="82" rx="22" fill="#17324d" />
+    <path d="M18 22h14l9 34 9-34h14L49 65H34L18 22Z" fill="#f5efe5" />
+    <circle cx="64" cy="19" r="7" fill="#ff6b56" />
+    <text x="106" y="54" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="44" font-weight="800" letter-spacing="2">VECTOR</text>
+    <text x="108" y="77" fill="#66717a" font-family="monospace" font-size="12" letter-spacing="2">PLACEMENT OPERATIONS</text>
+  </g>
+
+  <g transform="translate(78 216)">
+    <text fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="64" font-weight="800" letter-spacing="-3">
+      <tspan x="0" y="0">Every placement.</tspan>
+      <tspan x="0" y="74" fill="#bc3c2c">One clear picture.</tspan>
+    </text>
+    <text x="2" y="136" fill="#666c6f" font-family="Arial, Helvetica, sans-serif" font-size="22">Search, review progress and move milestones forward.</text>
+    <g transform="translate(2 181)">
+      <circle cx="6" cy="6" r="6" fill="#3b735b" />
+      <text x="22" y="12" fill="#17324d" font-family="monospace" font-size="14" font-weight="700" letter-spacing="1.5">SYNTHETIC DATA · BROWSER ONLY</text>
+    </g>
+  </g>
+
+  <g transform="translate(756 72)" filter="url(#shadow)">
+    <rect width="366" height="486" rx="26" fill="#17324d" />
+    <text x="34" y="48" fill="#f5efe5" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" letter-spacing="1">CURRENT COHORT</text>
+    <rect x="34" y="76" width="138" height="108" rx="12" fill="#fffaf2" />
+    <rect x="190" y="76" width="142" height="108" rx="12" fill="#ff6b56" />
+    <text x="52" y="111" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700">PLACEMENTS</text>
+    <text x="52" y="157" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800">06</text>
+    <text x="208" y="111" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700">COMPLETION</text>
+    <text x="208" y="157" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800">67%</text>
+
+    <g transform="translate(34 214)">
+      <rect width="298" height="68" rx="10" fill="#fffaf2" />
+      <circle cx="34" cy="34" r="18" fill="#f5efe5" />
+      <text x="23" y="39" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">NB</text>
+      <text x="64" y="30" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">Noah Bennett</text>
+      <text x="64" y="49" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="11">Fieldnote Studio</text>
+      <rect x="228" y="25" width="48" height="18" rx="9" fill="#dce8f1" />
+    </g>
+    <g transform="translate(34 296)">
+      <rect width="298" height="68" rx="10" fill="#fffaf2" />
+      <circle cx="34" cy="34" r="18" fill="#f5efe5" />
+      <text x="24" y="39" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">SM</text>
+      <text x="64" y="30" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">Sofia Marin</text>
+      <text x="64" y="49" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="11">Cobalt Systems</text>
+      <rect x="228" y="25" width="48" height="18" rx="9" fill="#f8dcd7" />
+    </g>
+    <g transform="translate(34 378)">
+      <rect width="298" height="68" rx="10" fill="#fffaf2" />
+      <circle cx="34" cy="34" r="18" fill="#f5efe5" />
+      <text x="24" y="39" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">LD</text>
+      <text x="64" y="30" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">Lea Dubois</text>
+      <text x="64" y="49" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="11">Atlas Workshop</text>
+      <rect x="228" y="25" width="48" height="18" rx="9" fill="#dce8f1" />
+    </g>
+  </g>
+</svg>
