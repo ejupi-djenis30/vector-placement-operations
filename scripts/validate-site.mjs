@@ -131,8 +131,21 @@ assert(
 assert(packageJson.name === "vector-placement-operations", "package.json must use the VECTOR package name.");
 assert(packageJson.homepage === PAGE_URL, "package.json must declare the public homepage.");
 assert(packageJson.license === "MIT", "package.json must declare the MIT license.");
+assert(packageJson.scripts?.["test:e2e"] === "playwright test", "package.json must expose the browser test command.");
+assert(
+  /^\d+\.\d+\.\d+$/.test(packageJson.devDependencies?.["@playwright/test"] ?? ""),
+  "@playwright/test must use an exact version without a floating range.",
+);
 assert(/Released under the \[MIT License\]\(LICENSE\)\./i.test(readme), "README.md must link to the MIT license.");
 assert(/\bMIT License\b/i.test(presentationText), "The public presentation must state the MIT license.");
+
+for (const file of [
+  "playwright.config.mjs",
+  "scripts/serve-site.mjs",
+  "e2e/workspace.spec.mjs",
+]) {
+  await stat(new URL(file, repositoryRoot));
+}
 
 const rootEntries = await readdir(repositoryRoot, { withFileTypes: true });
 assert(
@@ -155,6 +168,10 @@ for (const token of [
   "contents: read",
   "persist-credentials: false",
   "npm run check",
+  "runs-on: ubuntu-24.04",
+  "node-version: 24.16.0",
+  "npx --no-install playwright install --with-deps chromium",
+  "npm run test:e2e",
   "pages: write",
   "enablement: true",
   "actions/configure-pages@",
@@ -171,7 +188,17 @@ for (const token of [
 
 const ciWorkflow = workflows.get("ci.yml");
 assert(ciWorkflow, "A pull-request CI workflow is required.");
-for (const token of ["pull_request:", "contents: read", "persist-credentials: false", "npm run check"]) {
+for (const token of [
+  "pull_request:",
+  "contents: read",
+  "persist-credentials: false",
+  "npm run check",
+  "name: Chromium E2E",
+  "runs-on: ubuntu-24.04",
+  "node-version: 24.16.0",
+  "npx --no-install playwright install --with-deps chromium",
+  "npm run test:e2e",
+]) {
   assert(ciWorkflow.includes(token), `ci.yml is missing ${token}`);
 }
 
