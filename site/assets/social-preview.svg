@@ -37,12 +37,12 @@
   <g transform="translate(756 72)" filter="url(#shadow)">
     <rect width="366" height="486" rx="26" fill="#17324d" />
     <text x="34" y="48" fill="#f5efe5" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" letter-spacing="1">CURRENT COHORT</text>
-    <rect x="34" y="76" width="138" height="108" rx="12" fill="#fffaf2" />
-    <rect x="190" y="76" width="142" height="108" rx="12" fill="#ff6b56" />
+    <rect x="34" y="76" width="140" height="108" rx="12" fill="#fffaf2" />
+    <rect x="192" y="76" width="140" height="108" rx="12" fill="#ff6b56" />
     <text x="52" y="111" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700">PLACEMENTS</text>
     <text x="52" y="157" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800">06</text>
-    <text x="208" y="111" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700">COMPLETION</text>
-    <text x="208" y="157" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800">67%</text>
+    <text x="210" y="111" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700">COMPLETION</text>
+    <text x="210" y="157" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800">67%</text>
 
     <g transform="translate(34 214)">
       <rect width="298" height="68" rx="10" fill="#fffaf2" />

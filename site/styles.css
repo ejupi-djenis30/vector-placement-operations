@@ -181,9 +181,9 @@ footer{display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;align-items:cent
 }
 @media(max-width:1050px){.hero-board{width:min(100%,36rem);justify-self:center}}
 @media(max-width:700px){
-  .hero-board{width:100%;border-radius:1.5rem}
+  .hero-board{width:min(100%,36rem);border-radius:1.5rem}
   .board-frame{inset:5.5%;gap:.55rem;padding:.75rem;border-radius:1rem}
-  .flow-step{min-height:6.8rem;padding:.5rem;border-radius:.75rem}
+  .flow-step{min-height:clamp(6.25rem,32vw,6.8rem);padding:.5rem;border-radius:.75rem}
   .step-index{margin-bottom:.45rem}
   .flow-step b{margin-top:.45rem}
   .progress-panel{padding:.7rem;border-radius:.75rem}

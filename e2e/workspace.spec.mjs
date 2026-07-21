@@ -128,3 +128,65 @@ test.describe("mobile viewport", () => {
     await expect(page.locator(".console")).toBeVisible();
   });
 });
+
+test("keeps the hero board stable and symmetric across responsive boundaries", async ({ page }) => {
+  const boardWidths = [];
+
+  for (const width of [701, 700]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("./");
+    const board = await page.locator(".hero-board").boundingBox();
+    expect(board).not.toBeNull();
+    boardWidths.push(board.width);
+  }
+
+  expect(Math.abs(boardWidths[0] - boardWidths[1])).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("./");
+
+  const geometry = await page.evaluate(() => {
+    const rectangle = (selector) => {
+      const bounds = document.querySelector(selector).getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+        bottom: bounds.bottom,
+        width: bounds.width,
+      };
+    };
+    const steps = [...document.querySelectorAll(".flow-step")].map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        bottom: bounds.bottom,
+        width: bounds.width,
+      };
+    });
+
+    return {
+      board: rectangle(".hero-board"),
+      frame: rectangle(".board-frame"),
+      flow: rectangle(".placement-flow"),
+      progress: rectangle(".progress-panel"),
+      steps,
+    };
+  });
+
+  const frameLeftInset = geometry.frame.left - geometry.board.left;
+  const frameRightInset = geometry.board.right - geometry.frame.right;
+  expect(Math.abs(frameLeftInset - frameRightInset)).toBeLessThanOrEqual(1);
+
+  const stepWidths = geometry.steps.map((step) => step.width);
+  expect(Math.max(...stepWidths) - Math.min(...stepWidths)).toBeLessThanOrEqual(1);
+
+  const leftGap = geometry.steps[1].left - geometry.steps[0].right;
+  const rightGap = geometry.steps[2].left - geometry.steps[1].right;
+  expect(Math.abs(leftGap - rightGap)).toBeLessThanOrEqual(1);
+
+  const finalStepBottom = Math.max(...geometry.steps.map((step) => step.bottom));
+  expect(finalStepBottom).toBeLessThanOrEqual(geometry.flow.bottom + 1);
+  expect(geometry.progress.top - finalStepBottom).toBeGreaterThanOrEqual(7);
+});

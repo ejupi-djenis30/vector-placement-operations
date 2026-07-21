@@ -86,6 +86,18 @@ assert(
   "The social preview must be a 1200 × 630 SVG with a matching viewBox.",
 );
 assert(/<title\b/i.test(socialPreview) && /<desc\b/i.test(socialPreview), "The social preview must include accessible text.");
+const previewMetricCards = [...socialPreview.matchAll(
+  /<rect x="(\d+)" y="76" width="(\d+)" height="108" rx="12"/g,
+)].map(([, x, width]) => ({ x: Number(x), width: Number(width) }));
+assert(previewMetricCards.length === 2, "The social preview must contain exactly two metric cards.");
+assert(
+  previewMetricCards[0].width === previewMetricCards[1].width,
+  "The social preview metric cards must have equal widths.",
+);
+assert(
+  previewMetricCards[1].x - (previewMetricCards[0].x + previewMetricCards[0].width) === 18,
+  "The social preview metric cards must retain the designed 18 px gutter.",
+);
 assert(
   socialPreviewPng.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
     && socialPreviewPng.readUInt32BE(16) === 1200
