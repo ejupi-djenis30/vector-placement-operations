@@ -1,0 +1,57 @@
+name: Feature request
+description: Propose a focused improvement that fits VECTOR's browser-only scope.
+title: "[Feature] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the placement task, not a list of technologies. Use fictional examples only.
+        Security reports belong in the
+        [security policy](https://github.com/ejupi-djenis30/vector-placement-operations/security/policy).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What search, review, progress, accessibility, or reporting task is hard today?
+      placeholder: Describe one concrete use case.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Explain the behavior a user should see.
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Main area
+      options:
+        - Search or filtering
+        - Cohort metrics or progress
+        - Editing or local persistence
+        - Accessibility or responsive behavior
+        - Documentation or testing
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Privacy and scope
+      description: Explain how the proposal stays browser-only and safe for synthetic data.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Final checks
+      options:
+        - label: I searched existing issues and proposals.
+          required: true
+        - label: This proposal does not require real-person records or a hosted backend.
+          required: true
+        - label: I did not include private placement data.
+          required: true

@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible problem in the VECTOR board or its project site.
+title: "[Bug] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for isolating the problem. Use the bundled fictional cohort only. Do not post real
+        student, school, employer, or staff data. Vulnerabilities belong in the
+        [security policy](https://github.com/ejupi-djenis30/vector-placement-operations/security/policy).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Search or filters
+        - Placement status or hour calculations
+        - Editing, persistence, or reset
+        - Keyboard or screen-reader behavior
+        - Narrow-screen layout
+        - Project presentation or automation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: Paste the commit SHA you tested.
+      placeholder: "0ddd37d"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system, browser, browser version, and viewport when relevant.
+      placeholder: "Windows 11, Firefox 128, 390 × 844"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Give the smallest sequence that triggers the problem using synthetic data.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Optional screenshots or console output containing fictional data only.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Final checks
+      options:
+        - label: I searched the open issues for the same problem.
+          required: true
+        - label: I used synthetic data and removed all private records.
+          required: true
+        - label: This is not a vulnerability report.
+          required: true

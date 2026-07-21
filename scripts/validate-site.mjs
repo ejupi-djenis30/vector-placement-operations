@@ -181,6 +181,7 @@ for (const token of [
   "persist-credentials: false",
   "npm run check",
   "runs-on: ubuntu-24.04",
+  "timeout-minutes: 20",
   "node-version: 24.16.0",
   "npx --no-install playwright install --with-deps chromium",
   "npm run test:e2e",
