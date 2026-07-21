@@ -51,6 +51,13 @@ GitHub Pages publishes the contents of `site/` after the test and validation sui
 
 Live app: [ejupi-djenis30.github.io/vector-placement-operations](https://ejupi-djenis30.github.io/vector-placement-operations/)
 
+## Project policies
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change. Public reports must use synthetic
+data; sensitive problems belong in the [security policy](SECURITY.md). The
+[support guide](SUPPORT.md) points each kind of report to the right place, and every project space is
+covered by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 Released under the [MIT License](LICENSE).
