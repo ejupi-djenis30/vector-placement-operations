@@ -18,8 +18,12 @@
   ],
   "scripts": {
     "test": "node --test",
+    "test:e2e": "playwright test",
     "check:site": "node scripts/validate-site.mjs",
     "check": "npm test && npm run check:site"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
   },
   "engines": {
     "node": ">=22"

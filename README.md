@@ -26,18 +26,24 @@
 ## Run locally
 
 ```bash
-npm install
+npm ci --ignore-scripts
 npm run check
-python -m http.server 8000 --directory site
+node scripts/serve-site.mjs
 ```
 
-Then open `http://127.0.0.1:8000`.
+Then open `http://127.0.0.1:4173/vector-placement-operations/`. The local path deliberately
+matches GitHub Pages, so absolute-path regressions fail before deployment.
+
+Run the browser suite against the same local-only server:
+
+```bash
+npx --no-install playwright install chromium
+npm run test:e2e
+```
 
 ## Project background
 
-VECTOR began as a 2023 academic team project. This edition keeps the original product problem and rebuilds the application around fictional records, a browser-only data model and a deliberately small attack surface.
-
-The original team was Djenis Ejupi and project contributors. The contributors approved publication of this reconstructed edition.
+VECTOR began as a 2023 academic collaboration. This edition keeps the original product problem and rebuilds the application around fictional records, a browser-only data model and a deliberately small attack surface. The collaborators approved publication of this reconstructed edition.
 
 ## Deployment
 
