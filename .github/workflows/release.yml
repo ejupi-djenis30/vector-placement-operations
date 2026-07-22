@@ -1,0 +1,257 @@
+name: Release readiness
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      expected_tag:
+        description: Optional stable v<version> value for a non-publishing rehearsal
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_type == 'tag' && 'tags' || github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.16.0"
+  GH_CLI_VERSION: "2.94.0"
+  GH_CLI_SHA256: "a757f1ba6db18f4de8cbadb244843a5f89bc75b5e7c6fc127d2bd77fbd12ed62"
+  MIT_LICENSE_SHA256: "21303c465d4a75947e472df01cde991fda990c6edf3796bd9e76c626d9c543ec"
+  RELEASE_PUBLICATION_ENABLED: "true"
+
+jobs:
+  build:
+    name: Build and verify release candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.candidate.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Verify pinned Node.js toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(node --version)" == "v${NODE_VERSION}" ]]
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Validate source and release metadata
+        id: candidate
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_TAG: ${{ inputs.expected_tag || '' }}
+        run: |
+          set -euo pipefail
+          release_tag=""
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+            [[ "$(git cat-file -t "${release_tag}")" == "tag" ]]
+            [[ "$(git rev-parse "${release_tag}^{commit}")" == "${GITHUB_SHA}" ]]
+            git fetch --no-tags origin "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+            [[ "$(git rev-parse "refs/remotes/origin/${DEFAULT_BRANCH}^{commit}")" == "${GITHUB_SHA}" ]]
+          elif [[ -n "${EXPECTED_TAG}" ]]; then
+            release_tag="${EXPECTED_TAG}"
+          fi
+          arguments=()
+          if [[ -n "${release_tag}" ]]; then
+            arguments+=(--tag "${release_tag}")
+          fi
+          version="$(node scripts/release-cli.mjs metadata "${arguments[@]}")"
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+          printf 'release_tag=%s\n' "${release_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run unit, contract and static publication checks
+        run: |
+          npm run check
+          npm audit --audit-level=moderate
+
+      - name: Install pinned Chromium runtime
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Run browser acceptance tests
+        run: npm run test:e2e
+
+      - name: Build and verify candidate
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          arguments=()
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            arguments+=(--tag "${RELEASE_TAG}")
+          fi
+          node scripts/release-cli.mjs build \
+            --output release \
+            --commit "${GITHUB_SHA}" \
+            "${arguments[@]}"
+
+      - name: Upload verified release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vector-release-candidate
+          path: release
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload browser diagnostics on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vector-release-browser-diagnostics
+          path: test-results/playwright
+          if-no-files-found: ignore
+          retention-days: 7
+
+  reproducibility:
+    name: Independent reproducibility gate
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Download first candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vector-release-candidate
+          path: expected-release
+      - name: Rebuild and compare every candidate byte
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.expected_tag || '' }}
+        run: |
+          set -euo pipefail
+          arguments=()
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            arguments+=(--tag "${RELEASE_TAG}")
+          fi
+          node scripts/release-cli.mjs build \
+            --output rebuilt-release \
+            --commit "${GITHUB_SHA}" \
+            "${arguments[@]}"
+          node scripts/release-cli.mjs compare \
+            --directory expected-release \
+            --other-directory rebuilt-release \
+            --commit "${GITHUB_SHA}" \
+            "${arguments[@]}"
+
+  publish:
+    name: Attest and publish tagged release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs:
+      - build
+      - reproducibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Enforce license and publication approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${RELEASE_PUBLICATION_ENABLED}" == "true" ]]
+          printf '%s  %s\n' "${MIT_LICENSE_SHA256}" LICENSE | sha256sum --check --strict
+      - name: Install checksummed GitHub CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="gh_${GH_CLI_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          printf '%s  %s\n' "${GH_CLI_SHA256}" "${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/${archive}" --directory "${RUNNER_TEMP}"
+          gh_directory="${RUNNER_TEMP}/gh_${GH_CLI_VERSION}_linux_amd64/bin"
+          [[ "$("${gh_directory}/gh" --version | head -n 1)" == "gh version ${GH_CLI_VERSION} (2026-06-10)" ]]
+          printf '%s\n' "${gh_directory}" >> "${GITHUB_PATH}"
+      - name: Download gated release candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vector-release-candidate
+          path: release
+      - name: Reverify exact candidate
+        run: >-
+          node scripts/release-cli.mjs verify
+          --directory release
+          --commit "${GITHUB_SHA}"
+          --tag "${GITHUB_REF_NAME}"
+      - name: Attest checksummed release assets
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-checksums: release/SHA256SUMS
+      - name: Attest checksum manifest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: release/SHA256SUMS
+      - name: Verify build provenance before publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' asset; do
+            gh attestation verify "${asset}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+              --source-digest "${GITHUB_SHA}" \
+              --source-ref "${GITHUB_REF}" \
+              --predicate-type "https://slsa.dev/provenance/v1" \
+              --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --deny-self-hosted-runners
+          done < <(find release -maxdepth 1 -type f -print0 | sort -z)
+      - name: Publish exact immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/publish-release.mjs
+          --directory release
+          --tag "${GITHUB_REF_NAME}"
+          --repository "${GITHUB_REPOSITORY}"
+          --default-branch "${{ github.event.repository.default_branch }}"
+          --source-commit "${GITHUB_SHA}"

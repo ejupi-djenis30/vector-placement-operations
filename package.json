@@ -20,7 +20,10 @@
     "test": "node --test",
     "test:e2e": "playwright test",
     "check:site": "node scripts/validate-site.mjs",
-    "check": "npm test && npm run check:site"
+    "check:release": "node scripts/release-cli.mjs metadata",
+    "release:build": "node scripts/release-cli.mjs build --output release",
+    "release:verify": "node scripts/release-cli.mjs verify --directory release",
+    "check": "npm test && npm run check:site && npm run check:release"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1"

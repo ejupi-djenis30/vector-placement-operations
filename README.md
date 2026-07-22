@@ -51,6 +51,18 @@ GitHub Pages publishes the contents of `site/` after the test and validation sui
 
 Live app: [ejupi-djenis30.github.io/vector-placement-operations](https://ejupi-djenis30.github.io/vector-placement-operations/)
 
+## Verified releases
+
+Each stable release contains the complete static site as deterministic `.zip` and `.tar.gz`
+archives. The release also includes a file inventory, a CycloneDX SBOM, source-commit evidence and
+SHA-256 checksums. GitHub build-provenance attestations bind every published asset to the tagged
+source commit.
+
+The release workflow accepts only an annotated, GitHub-verified `v<version>` tag at the current
+default-branch commit. It builds the candidate twice and compares both copies byte for byte before
+publication. See [the release guide](docs/releasing.md) for the rehearsal and verification commands,
+and [the changelog](CHANGELOG.md) for version history.
+
 ## Project policies
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a change. Public reports must use synthetic
