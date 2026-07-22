@@ -217,7 +217,18 @@ for (const token of [
 
 for (const [name, workflow] of workflows) {
   assert(!/pull_request_target\s*:/i.test(workflow), `${name} must not run privileged code from pull requests.`);
-  assert(!/contents:\s*write|permissions:\s*write-all/i.test(workflow), `${name} grants broader write access than required.`);
+  assert(!/permissions:\s*write-all/i.test(workflow), `${name} grants broader write access than required.`);
+  const contentWriteGrants = [...workflow.matchAll(/contents:\s*write/g)];
+  if (name === "release.yml") {
+    assert(contentWriteGrants.length === 1, "release.yml must grant contents: write only to its publish job.");
+    assert(
+      workflow.indexOf("contents: write") > workflow.indexOf("publish:")
+        && workflow.indexOf("contents: write") < workflow.indexOf("Attest checksummed release assets"),
+      "release.yml grants publication permission outside the publish job.",
+    );
+  } else {
+    assert(contentWriteGrants.length === 0, `${name} grants content write access.`);
+  }
   for (const match of workflow.matchAll(/\buses:\s*([^\s#]+)/g)) {
     assert(/@[0-9a-f]{40}$/i.test(match[1]), `${name} must pin ${match[1]} to a full commit SHA.`);
   }
