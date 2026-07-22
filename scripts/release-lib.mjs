@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
+import { constants } from "node:fs";
 import {
   lstat,
   mkdir,
+  open,
   readFile,
   readdir,
   writeFile,
@@ -35,6 +37,24 @@ function assertSafeAssetName(name) {
   assert.equal(typeof name, "string", "Release asset names must be strings.");
   assert.equal(basename(name), name, `Unsafe release asset name: ${name}`);
   assert.match(name, /^[A-Za-z0-9._-]+$/, `Unsupported release asset name: ${name}`);
+}
+
+async function readRegularFile(path, description) {
+  const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  const handle = await open(path, constants.O_RDONLY | noFollow);
+  try {
+    const before = await handle.stat();
+    assert.equal(before.isFile(), true, `${description} must be a regular file: ${path}`);
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    assert.equal(after.dev, before.dev, `${description} changed device while it was read: ${path}`);
+    assert.equal(after.ino, before.ino, `${description} changed identity while it was read: ${path}`);
+    assert.equal(after.size, before.size, `${description} changed size while it was read: ${path}`);
+    assert.equal(bytes.length, before.size, `${description} was not read completely: ${path}`);
+    return bytes;
+  } finally {
+    await handle.close();
+  }
 }
 
 function changelogSection(changelog, version) {
@@ -98,7 +118,7 @@ async function collectFiles(root) {
         assert.equal(metadata.isFile(), true, `Static release input must contain regular files only: ${path}`);
         const relativePath = relative(root, path).split(sep).join("/");
         assert.ok(relativePath !== "" && !relativePath.startsWith("../"), `Unsafe static file path: ${relativePath}`);
-        const bytes = await readFile(path);
+        const bytes = await readRegularFile(path, "Static release input");
         files.push({ bytes, path: relativePath });
       }
     }
@@ -542,8 +562,8 @@ export async function releaseAssetManifest(directory) {
   const assets = [];
   for (const entry of entries.sort((left, right) => utf8Compare(left.name, right.name))) {
     assertSafeAssetName(entry.name);
-    const bytes = await readFile(resolve(directory, entry.name));
-    assets.push({ name: entry.name, size: bytes.length, digest: `sha256:${sha256(bytes)}` });
+    const bytes = await readRegularFile(resolve(directory, entry.name), "Release asset");
+    assets.push({ name: entry.name, size: bytes.length, digest: `sha256:${sha256(bytes)}`, bytes });
   }
   return assets;
 }

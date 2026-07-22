@@ -126,20 +126,18 @@ class GitHubClient {
     assert.ok(typeof process.env.GH_TOKEN === "string" && process.env.GH_TOKEN !== "", "GH_TOKEN is required.");
     const uploadUrl = assertUploadUrl(release.upload_url, this.repository, release.id);
     uploadUrl.searchParams.set("name", asset.name);
-    const response = await fetch(uploadUrl, {
-      method: "POST",
-      redirect: "error",
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${process.env.GH_TOKEN}`,
-        "Content-Type": "application/octet-stream",
-        "X-GitHub-Api-Version": apiVersion,
-      },
-      body: await readFile(asset.path),
-    });
-    const responseBody = await response.text();
-    assert.ok(response.ok, `GitHub asset upload failed with HTTP ${response.status}: ${responseBody}`);
-    return JSON.parse(responseBody);
+    const args = [
+      "api",
+      "--method=POST",
+      uploadUrl.href,
+      "-H", "Accept: application/vnd.github+json",
+      "-H", "Content-Type: application/octet-stream",
+      "-H", `X-GitHub-Api-Version: ${apiVersion}`,
+      "--input", "-",
+    ];
+    const result = runGitHub(args, asset.bytes);
+    if (result.status !== 0) throw commandError(args, result);
+    return JSON.parse(result.stdout);
   }
 }
 
@@ -247,7 +245,6 @@ export async function publishReleaseCandidate({
 
   const assets = (await releaseAssetManifest(directory)).map((asset) => ({
     ...asset,
-    path: resolve(directory, asset.name),
   }));
   const checksum = assets.find(({ name }) => name === "SHA256SUMS");
   assert.ok(checksum, "Release candidate is missing SHA256SUMS.");
