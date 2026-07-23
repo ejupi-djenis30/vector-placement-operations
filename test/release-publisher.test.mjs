@@ -9,11 +9,19 @@ import { publishReleaseCandidate } from "../scripts/publish-release.mjs";
 
 const COMMIT = "b".repeat(40);
 const TAG_SHA = "c".repeat(40);
+const UNAPPROVED_TAGGER_EMAIL = ["info", "ejupilabs.com"].join("@");
 
 class FakeGitHub {
-  constructor({ verified = true, immutable = true } = {}) {
+  constructor({
+    verified = true,
+    immutable = true,
+    taggerName = "Djenis Ejupi",
+    taggerEmail = "69587167+ejupi-djenis30@users.noreply.github.com",
+  } = {}) {
     this.verified = verified;
     this.publishedImmutable = immutable;
+    this.taggerName = taggerName;
+    this.taggerEmail = taggerEmail;
     this.release = null;
     this.latest = null;
     this.mutations = [];
@@ -27,7 +35,8 @@ class FakeGitHub {
   async tagObject() {
     return {
       sha: TAG_SHA,
-      tag: "v2.0.0",
+      tag: "v2.0.1",
+      tagger: { name: this.taggerName, email: this.taggerEmail },
       verification: { verified: this.verified },
       object: { type: "commit", sha: COMMIT },
     };
@@ -95,14 +104,14 @@ async function fixture(context) {
   const root = await mkdtemp(resolve(tmpdir(), "vector-publisher-"));
   context.after(() => rm(root, { recursive: true, force: true }));
   const directory = resolve(root, "release");
-  await buildReleaseCandidate({ output: directory, sourceCommit: COMMIT, tag: "v2.0.0" });
+  await buildReleaseCandidate({ output: directory, sourceCommit: COMMIT, tag: "v2.0.1" });
   return directory;
 }
 
 function publish(directory, client) {
   return publishReleaseCandidate({
     directory,
-    tag: "v2.0.0",
+    tag: "v2.0.1",
     repository: "ejupi-djenis30/vector-placement-operations",
     defaultBranch: "main",
     sourceCommit: COMMIT,
@@ -136,12 +145,21 @@ test("publisher rejects an unverified tag before any mutation", async (context) 
   assert.deepEqual(client.mutations, []);
 });
 
+test("publisher rejects a GitHub-verified tagger outside release policy before mutation", async (context) => {
+  const directory = await fixture(context);
+  const client = new FakeGitHub({
+    taggerEmail: UNAPPROVED_TAGGER_EMAIL,
+  });
+  await assert.rejects(() => publish(directory, client), /tagger email differs from release policy/);
+  assert.deepEqual(client.mutations, []);
+});
+
 test("publisher refuses a foreign draft", async (context) => {
   const directory = await fixture(context);
   const client = new FakeGitHub();
   client.release = {
     id: 7,
-    tag_name: "v2.0.0",
+    tag_name: "v2.0.1",
     target_commitish: COMMIT,
     name: "Foreign draft",
     body: "Unrelated body",
@@ -167,7 +185,7 @@ test("publisher rejects non-tag and disabled publication contexts before GitHub 
   await assert.rejects(
     () => publishReleaseCandidate({
       directory,
-      tag: "v2.0.0",
+      tag: "v2.0.1",
       repository: "ejupi-djenis30/vector-placement-operations",
       defaultBranch: "main",
       sourceCommit: COMMIT,

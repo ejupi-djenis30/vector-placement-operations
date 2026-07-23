@@ -17,9 +17,12 @@ export const repositoryRoot = resolve(fileURLToPath(new URL("../", import.meta.u
 export const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export const sourceCommitPattern = /^[0-9a-f]{40}$/;
 export const canonicalGzipOperatingSystem = 0xff;
+export const releaseTaggerName = "Djenis Ejupi";
+export const releaseTaggerEmail = "69587167+ejupi-djenis30@users.noreply.github.com";
 
 const inventorySchema = "https://ejupilabs.com/schemas/vector/site-inventory/v1";
 const releaseSchema = "https://ejupilabs.com/schemas/vector/release-manifest/v1";
+const releasePolicySchema = "https://ejupilabs.com/schemas/vector/release-policy/v1";
 const archiveRoot = (version) => `vector-placement-operations-${version}`;
 const gzipHeaderLength = 10;
 const gzipOperatingSystemOffset = 9;
@@ -72,15 +75,34 @@ function changelogSection(changelog, version) {
   return { date: match[1], notes: `${match[2].trim()}\n` };
 }
 
+function validateReleasePolicy(value) {
+  assert.equal(value?.$schema, releasePolicySchema, "release-policy.json uses an unsupported schema.");
+  assert.deepEqual(
+    Object.keys(value).sort(),
+    ["$schema", "tagger"],
+    "release-policy.json contains unsupported top-level fields.",
+  );
+  assert.deepEqual(
+    Object.keys(value.tagger ?? {}).sort(),
+    ["email", "name"],
+    "release-policy.json must define exactly one tagger name and email.",
+  );
+  assert.equal(value.tagger.name, releaseTaggerName, "release-policy.json has an unexpected tagger name.");
+  assert.equal(value.tagger.email, releaseTaggerEmail, "release-policy.json has an unexpected tagger email.");
+  return { email: value.tagger.email, name: value.tagger.name };
+}
+
 export async function validateReleaseMetadata({ tag } = {}) {
-  const [packageText, lockText, changelog, license] = await Promise.all([
+  const [packageText, lockText, changelog, license, policyText] = await Promise.all([
     readFile(resolve(repositoryRoot, "package.json"), "utf8"),
     readFile(resolve(repositoryRoot, "package-lock.json"), "utf8"),
     readFile(resolve(repositoryRoot, "CHANGELOG.md"), "utf8"),
     readFile(resolve(repositoryRoot, "LICENSE"), "utf8"),
+    readFile(resolve(repositoryRoot, "release-policy.json"), "utf8"),
   ]);
   const packageJson = JSON.parse(packageText);
   const packageLock = JSON.parse(lockText);
+  const tagger = validateReleasePolicy(JSON.parse(policyText));
   const version = packageJson.version;
 
   assert.match(version, stableVersionPattern, "package.json must declare a stable semantic version.");
@@ -101,7 +123,29 @@ export async function validateReleaseMetadata({ tag } = {}) {
     date: section.date,
     name: packageJson.name,
     notes: section.notes,
+    tagger,
     version,
+  };
+}
+
+export async function validateTagPreflight({
+  tag,
+  sourceCommit,
+  taggerEmail,
+  taggerName,
+} = {}) {
+  assert.equal(typeof tag, "string", "Tag preflight requires a tag.");
+  assert.match(sourceCommit, sourceCommitPattern, "Tag preflight requires a lowercase 40-character commit.");
+  assert.equal(typeof taggerName, "string", "Tag preflight requires an explicit tagger name.");
+  assert.equal(typeof taggerEmail, "string", "Tag preflight requires an explicit tagger email.");
+  const metadata = await validateReleaseMetadata({ tag });
+  assert.equal(taggerName, metadata.tagger.name, "Tagger name differs from release-policy.json.");
+  assert.equal(taggerEmail, metadata.tagger.email, "Tagger email differs from release-policy.json.");
+  return {
+    sourceCommit,
+    tag,
+    tagger: metadata.tagger,
+    version: metadata.version,
   };
 }
 

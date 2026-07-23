@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { gzipSync, gunzipSync } from "node:zlib";
 
 import {
@@ -12,18 +14,81 @@ import {
   canonicalizeGzipHeader,
   compareReleaseCandidates,
   validateReleaseMetadata,
+  validateTagPreflight,
   verifyReleaseCandidate,
 } from "../scripts/release-lib.mjs";
 
 const COMMIT = "a".repeat(40);
+const UNAPPROVED_TAGGER_EMAIL = ["info", "ejupilabs.com"].join("@");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const releaseCli = fileURLToPath(new URL("../scripts/release-cli.mjs", import.meta.url));
 
 test("version metadata stays synchronized and accepts only its stable tag", async () => {
-  const metadata = await validateReleaseMetadata({ tag: "v2.0.0" });
-  assert.equal(metadata.version, "2.0.0");
-  assert.match(metadata.notes, /deterministic static-site archives/);
-  await assert.rejects(() => validateReleaseMetadata({ tag: "v2.0.1" }), /does not match package version/);
-  await assert.rejects(() => validateReleaseMetadata({ tag: "2.0.0" }), /does not match package version/);
+  const metadata = await validateReleaseMetadata({ tag: "v2.0.1" });
+  assert.equal(metadata.version, "2.0.1");
+  assert.match(metadata.notes, /runtime forward unchanged/);
+  await assert.rejects(() => validateReleaseMetadata({ tag: "v2.0.0" }), /does not match package version/);
+  await assert.rejects(() => validateReleaseMetadata({ tag: "2.0.1" }), /does not match package version/);
+});
+
+test("tag preflight requires the tracked GitHub-verifiable tagger identity", async () => {
+  const result = await validateTagPreflight({
+    sourceCommit: COMMIT,
+    tag: "v2.0.1",
+    taggerName: "Djenis Ejupi",
+    taggerEmail: "69587167+ejupi-djenis30@users.noreply.github.com",
+  });
+  assert.deepEqual(result, {
+    sourceCommit: COMMIT,
+    tag: "v2.0.1",
+    tagger: {
+      email: "69587167+ejupi-djenis30@users.noreply.github.com",
+      name: "Djenis Ejupi",
+    },
+    version: "2.0.1",
+  });
+  await assert.rejects(
+    () => validateTagPreflight({
+      sourceCommit: COMMIT,
+      tag: "v2.0.1",
+      taggerName: "Ejupi Labs",
+      taggerEmail: UNAPPROVED_TAGGER_EMAIL,
+    }),
+    /Tagger name differs from release-policy/,
+  );
+  await assert.rejects(
+    () => validateTagPreflight({
+      sourceCommit: COMMIT,
+      tag: "v2.0.1",
+      taggerName: "Djenis Ejupi",
+      taggerEmail: UNAPPROVED_TAGGER_EMAIL,
+    }),
+    /Tagger email differs from release-policy/,
+  );
+});
+
+test("tag preflight CLI fails closed for the unpublished corporate tagger identity", () => {
+  const baseArguments = [
+    releaseCli,
+    "tag-preflight",
+    "--tag", "v2.0.1",
+    "--commit", COMMIT,
+    "--tagger-name", "Djenis Ejupi",
+    "--tagger-email",
+  ];
+  const approved = spawnSync(process.execPath, [
+    ...baseArguments,
+    "69587167+ejupi-djenis30@users.noreply.github.com",
+  ], { encoding: "utf8", windowsHide: true });
+  assert.equal(approved.status, 0, approved.stderr);
+  assert.match(approved.stdout, /tag preflight passed/);
+
+  const rejected = spawnSync(process.execPath, [
+    ...baseArguments,
+    UNAPPROVED_TAGGER_EMAIL,
+  ], { encoding: "utf8", windowsHide: true });
+  assert.notEqual(rejected.status, 0);
+  assert.match(`${rejected.stdout}\n${rejected.stderr}`, /Tagger email differs from release-policy/);
 });
 
 test("two independently assembled static candidates are byte-for-byte identical", async (context) => {
@@ -31,15 +96,15 @@ test("two independently assembled static candidates are byte-for-byte identical"
   context.after(() => rm(root, { recursive: true, force: true }));
   const first = resolve(root, "first");
   const second = resolve(root, "second");
-  await buildReleaseCandidate({ output: first, sourceCommit: COMMIT, tag: "v2.0.0" });
-  await buildReleaseCandidate({ output: second, sourceCommit: COMMIT, tag: "v2.0.0" });
+  await buildReleaseCandidate({ output: first, sourceCommit: COMMIT, tag: "v2.0.1" });
+  await buildReleaseCandidate({ output: second, sourceCommit: COMMIT, tag: "v2.0.1" });
   const result = await compareReleaseCandidates({
     directory: first,
     otherDirectory: second,
     sourceCommit: COMMIT,
-    tag: "v2.0.0",
+    tag: "v2.0.1",
   });
-  assert.deepEqual(result, { sourceCommit: COMMIT, version: "2.0.0" });
+  assert.deepEqual(result, { sourceCommit: COMMIT, version: "2.0.1" });
   assert.deepEqual(await readdir(first), await readdir(second));
 });
 
@@ -87,21 +152,21 @@ test("candidate verification rejects a checksum-consistent host-specific gzip he
   const root = await mkdtemp(join(tmpdir(), "vector-release-gzip-os-"));
   context.after(() => rm(root, { recursive: true, force: true }));
   const candidate = resolve(root, "candidate");
-  await buildReleaseCandidate({ output: candidate, sourceCommit: COMMIT, tag: "v2.0.0" });
+  await buildReleaseCandidate({ output: candidate, sourceCommit: COMMIT, tag: "v2.0.1" });
 
-  const archivePath = resolve(candidate, "vector-site-2.0.0.tar.gz");
+  const archivePath = resolve(candidate, "vector-site-2.0.1.tar.gz");
   const archive = await readFile(archivePath);
   archive[9] = 3;
   await writeFile(archivePath, archive);
   const checksumPath = resolve(candidate, "SHA256SUMS");
   const checksums = (await readFile(checksumPath, "utf8")).replace(
-    /^[0-9a-f]{64}  vector-site-2\.0\.0\.tar\.gz$/m,
-    `${sha256(archive)}  vector-site-2.0.0.tar.gz`,
+    /^[0-9a-f]{64}  vector-site-2\.0\.1\.tar\.gz$/m,
+    `${sha256(archive)}  vector-site-2.0.1.tar.gz`,
   );
   await writeFile(checksumPath, checksums);
 
   await assert.rejects(
-    () => verifyReleaseCandidate({ directory: candidate, sourceCommit: COMMIT, tag: "v2.0.0" }),
+    () => verifyReleaseCandidate({ directory: candidate, sourceCommit: COMMIT, tag: "v2.0.1" }),
     /unknown operating-system marker/,
   );
 });
@@ -112,7 +177,7 @@ test("candidate verification detects archive drift even when checksums are rewri
   const candidate = resolve(root, "candidate");
   await buildReleaseCandidate({ output: candidate, sourceCommit: COMMIT });
 
-  const archivePath = resolve(candidate, "vector-site-2.0.0.zip");
+  const archivePath = resolve(candidate, "vector-site-2.0.1.zip");
   const archive = await readFile(archivePath);
   const contentOffset = archive.indexOf(Buffer.from("<!doctype html>"));
   assert.ok(contentOffset >= 0, "The deterministic ZIP must contain index.html bytes in store mode.");
@@ -122,8 +187,8 @@ test("candidate verification detects archive drift even when checksums are rewri
   const digest = crypto.createHash("sha256").update(archive).digest("hex");
   const checksumPath = resolve(candidate, "SHA256SUMS");
   const checksums = (await readFile(checksumPath, "utf8")).replace(
-    /^[0-9a-f]{64}  vector-site-2\.0\.0\.zip$/m,
-    `${digest}  vector-site-2.0.0.zip`,
+    /^[0-9a-f]{64}  vector-site-2\.0\.1\.zip$/m,
+    `${digest}  vector-site-2.0.1.zip`,
   );
   await writeFile(checksumPath, checksums);
 
