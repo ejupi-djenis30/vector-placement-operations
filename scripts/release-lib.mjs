@@ -16,10 +16,13 @@ import { fileURLToPath } from "node:url";
 export const repositoryRoot = resolve(fileURLToPath(new URL("../", import.meta.url)));
 export const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export const sourceCommitPattern = /^[0-9a-f]{40}$/;
+export const canonicalGzipOperatingSystem = 0xff;
 
 const inventorySchema = "https://ejupilabs.com/schemas/vector/site-inventory/v1";
 const releaseSchema = "https://ejupilabs.com/schemas/vector/release-manifest/v1";
 const archiveRoot = (version) => `vector-placement-operations-${version}`;
+const gzipHeaderLength = 10;
+const gzipOperatingSystemOffset = 9;
 
 function utf8Compare(left, right) {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
@@ -159,6 +162,36 @@ function tarHeader(name, size) {
   return header;
 }
 
+function validateGzipHeader(bytes) {
+  assert.ok(Buffer.isBuffer(bytes), "Release gzip output must be a Buffer.");
+  assert.ok(
+    bytes.length >= gzipHeaderLength + 8,
+    "Release gzip output is too short to contain its fixed header and trailer.",
+  );
+  assert.equal(bytes[0], 0x1f, "Release gzip output has an invalid first magic byte.");
+  assert.equal(bytes[1], 0x8b, "Release gzip output has an invalid second magic byte.");
+  assert.equal(bytes[2], 0x08, "Release gzip output does not use the DEFLATE compression method.");
+  assert.equal(bytes[3], 0x00, "Release gzip output must use the fixed ten-byte header.");
+}
+
+export function canonicalizeGzipHeader(bytes) {
+  validateGzipHeader(bytes);
+  const canonical = Buffer.from(bytes);
+  // RFC 1952 section 2.3.1 reserves 255 for an unknown operating system.
+  // Node otherwise writes the host OS here, making identical TAR bytes differ by platform.
+  canonical[gzipOperatingSystemOffset] = canonicalGzipOperatingSystem;
+  return canonical;
+}
+
+function assertCanonicalGzipHeader(bytes) {
+  validateGzipHeader(bytes);
+  assert.equal(
+    bytes[gzipOperatingSystemOffset],
+    canonicalGzipOperatingSystem,
+    "Release gzip output must use the RFC 1952 unknown operating-system marker.",
+  );
+}
+
 function buildTarGzip(files, version) {
   const chunks = [];
   for (const file of files) {
@@ -168,7 +201,7 @@ function buildTarGzip(files, version) {
     if (remainder !== 0) chunks.push(Buffer.alloc(512 - remainder));
   }
   chunks.push(Buffer.alloc(1024));
-  return gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 });
+  return canonicalizeGzipHeader(gzipSync(Buffer.concat(chunks), { level: 9, mtime: 0 }));
 }
 
 const crcTable = Array.from({ length: 256 }, (_, index) => {
@@ -505,7 +538,9 @@ export async function verifyReleaseCandidate({ directory, sourceCommit, tag } = 
   const inventory = JSON.parse(await readFile(resolve(root, `${prefix}.inventory.json`), "utf8"));
   validateInventory(inventory, siteFiles, metadata.version, candidateCommit);
 
-  const tarInventory = archiveInventory(readTarFiles(await readFile(resolve(root, `${prefix}.tar.gz`)), metadata.version), metadata.version);
+  const tarGzip = await readFile(resolve(root, `${prefix}.tar.gz`));
+  assertCanonicalGzipHeader(tarGzip);
+  const tarInventory = archiveInventory(readTarFiles(tarGzip, metadata.version), metadata.version);
   const zipInventory = archiveInventory(readZipFiles(await readFile(resolve(root, `${prefix}.zip`)), metadata.version), metadata.version);
   assert.deepEqual(tarInventory, inventory.files, "The tar.gz content differs from the site inventory.");
   assert.deepEqual(zipInventory, inventory.files, "The ZIP content differs from the site inventory.");

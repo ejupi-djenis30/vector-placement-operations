@@ -126,10 +126,16 @@ jobs:
           retention-days: 7
 
   reproducibility:
-    name: Independent reproducibility gate
+    name: Independent reproducibility gate (${{ matrix.os }})
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-2022
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
