@@ -17,6 +17,10 @@ A stable release is eligible for publication only when all of these statements a
 7. The GitHub Release becomes immutable. The publisher refuses to modify an existing published
    release or an unrelated draft.
 
+The `.tar.gz` builder writes RFC 1952 operating-system value `255` (`unknown`) into the gzip header.
+The release gate compares an Ubuntu candidate with independent Ubuntu and Windows rebuilds, so a
+host-specific gzip header or checkout transformation cannot pass as reproducible.
+
 ## Local candidate
 
 Use the locked dependency graph and build a candidate from a clean commit:

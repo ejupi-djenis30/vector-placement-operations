@@ -16,5 +16,6 @@ Notable changes to VECTOR are recorded here.
 - Removed legacy documents and media from the public edition, licensed the project under MIT with
   contributor approval and credited collaboration collectively.
 - Added pinned CI and GitHub Pages workflows plus contribution, support, security and conduct policies.
-- Added deterministic static-site archives, an exact file inventory, a CycloneDX SBOM, consolidated
-  SHA-256 checksums, independent reproducibility checks and build-provenance attestations.
+- Added deterministic static-site archives with a platform-neutral RFC 1952 gzip header, an exact
+  file inventory, a CycloneDX SBOM, consolidated SHA-256 checksums, cross-platform reproducibility
+  checks and build-provenance attestations.
