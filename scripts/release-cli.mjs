@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
 import {
+  assertCleanTaggerEnvironment,
   buildReleaseCandidate,
   compareReleaseCandidates,
+  validateLocalSignedTag,
   validateReleaseMetadata,
   validateTagPreflight,
   verifyReleaseCandidate,
@@ -29,11 +31,12 @@ function sourceCommit(options) {
 
 const [command = "metadata", ...values] = process.argv.slice(2);
 const options = argumentsFor(values);
-const allowed = new Set(["metadata", "tag-preflight", "build", "verify", "compare"]);
+const allowed = new Set(["metadata", "tag-preflight", "tag-verify", "build", "verify", "compare"]);
 assert.ok(allowed.has(command), `Unknown release command: ${command}`);
 const commandOptions = {
   metadata: new Set(["--tag"]),
   "tag-preflight": new Set(["--commit", "--tag", "--tagger-email", "--tagger-name"]),
+  "tag-verify": new Set(["--commit", "--tag"]),
   build: new Set(["--commit", "--output", "--tag"]),
   verify: new Set(["--commit", "--directory", "--tag"]),
   compare: new Set(["--commit", "--directory", "--other-directory", "--tag"]),
@@ -46,6 +49,7 @@ if (command === "metadata") {
   console.log(metadata.version);
 } else if (command === "tag-preflight") {
   assert.ok(options.has("--commit"), "tag-preflight requires --commit.");
+  assertCleanTaggerEnvironment();
   const result = await validateTagPreflight({
     sourceCommit: sourceCommit(options),
     tag,
@@ -55,6 +59,16 @@ if (command === "metadata") {
   console.log(
     `VECTOR ${result.tag} tag preflight passed for ${result.tagger.name} <${result.tagger.email}> ` +
     `at ${result.sourceCommit}.`,
+  );
+} else if (command === "tag-verify") {
+  assert.ok(options.has("--commit"), "tag-verify requires --commit.");
+  const result = await validateLocalSignedTag({
+    sourceCommit: sourceCommit(options),
+    tag,
+  });
+  console.log(
+    `VECTOR ${result.tag} local signed tag ${result.tagObject} verified at ${result.sourceCommit} ` +
+    `with ${result.signingKey.fingerprint}.`,
   );
 } else if (command === "build") {
   const output = options.get("--output");

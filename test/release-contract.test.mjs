@@ -9,19 +9,71 @@ import { fileURLToPath } from "node:url";
 import { gzipSync, gunzipSync } from "node:zlib";
 
 import {
+  assertCleanTaggerEnvironment,
   buildReleaseCandidate,
   canonicalGzipOperatingSystem,
   canonicalizeGzipHeader,
   compareReleaseCandidates,
+  releaseSigningKeyFingerprint,
+  validateLocalSignedTag,
   validateReleaseMetadata,
   validateTagPreflight,
   verifyReleaseCandidate,
 } from "../scripts/release-lib.mjs";
 
 const COMMIT = "a".repeat(40);
+const TAG_OBJECT = "b".repeat(40);
 const UNAPPROVED_TAGGER_EMAIL = ["info", "ejupilabs.com"].join("@");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const releaseCli = fileURLToPath(new URL("../scripts/release-cli.mjs", import.meta.url));
+
+function localTagGit({
+  fingerprint = releaseSigningKeyFingerprint,
+  objectType = "tag",
+  peeledTarget = COMMIT,
+  tagTarget = COMMIT,
+  taggerEmail = "69587167+ejupi-djenis30@users.noreply.github.com",
+  taggerName = "Djenis Ejupi",
+} = {}) {
+  const calls = [];
+  const runGit = (arguments_) => {
+    calls.push(arguments_);
+    const invocation = arguments_.join("\0");
+    if (invocation === `show-ref\0--verify\0--hash\0refs/tags/v2.0.1`) {
+      return { stderr: "", stdout: `${TAG_OBJECT}\n` };
+    }
+    if (invocation === `cat-file\0-t\0${TAG_OBJECT}`) {
+      return { stderr: "", stdout: `${objectType}\n` };
+    }
+    if (invocation === `cat-file\0-p\0${TAG_OBJECT}`) {
+      return {
+        stderr: "",
+        stdout:
+          `object ${tagTarget}\n` +
+          "type commit\n" +
+          "tag v2.0.1\n" +
+          `tagger ${taggerName} <${taggerEmail}> 1784764800 +0200\n\n` +
+          "VECTOR 2.0.1\n",
+      };
+    }
+    if (invocation === `cat-file\0-t\0${COMMIT}`) {
+      return { stderr: "", stdout: "commit\n" };
+    }
+    if (invocation === "rev-parse\0--verify\0refs/tags/v2.0.1^{}") {
+      return { stderr: "", stdout: `${peeledTarget}\n` };
+    }
+    if (invocation === "verify-tag\0--raw\0refs/tags/v2.0.1") {
+      return {
+        stderr:
+          `Good "git" signature for 69587167+ejupi-djenis30@users.noreply.github.com ` +
+          `with ED25519 key ${fingerprint}\n`,
+        stdout: "",
+      };
+    }
+    assert.fail(`Unexpected fake git invocation: ${arguments_.join(" ")}`);
+  };
+  return { calls, runGit };
+}
 
 test("version metadata stays synchronized and accepts only its stable tag", async () => {
   const metadata = await validateReleaseMetadata({ tag: "v2.0.1" });
@@ -89,6 +141,108 @@ test("tag preflight CLI fails closed for the unpublished corporate tagger identi
   ], { encoding: "utf8", windowsHide: true });
   assert.notEqual(rejected.status, 0);
   assert.match(`${rejected.stdout}\n${rejected.stderr}`, /Tagger email differs from release-policy/);
+});
+
+test("tag preflight rejects Git tagger environment overrides before tag creation", () => {
+  assert.throws(
+    () => assertCleanTaggerEnvironment({
+      PATH: process.env.PATH,
+      git_committer_email: UNAPPROVED_TAGGER_EMAIL,
+    }),
+    /GIT_COMMITTER_EMAIL.*overrides are forbidden/,
+  );
+  assert.throws(
+    () => assertCleanTaggerEnvironment({
+      GIT_COMMITTER_NAME: "Ejupi Labs",
+      PATH: process.env.PATH,
+    }),
+    /GIT_COMMITTER_NAME.*overrides are forbidden/,
+  );
+
+  const rejected = spawnSync(process.execPath, [
+    releaseCli,
+    "tag-preflight",
+    "--tag", "v2.0.1",
+    "--commit", COMMIT,
+    "--tagger-name", "Djenis Ejupi",
+    "--tagger-email", "69587167+ejupi-djenis30@users.noreply.github.com",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_COMMITTER_EMAIL: UNAPPROVED_TAGGER_EMAIL,
+    },
+    windowsHide: true,
+  });
+  assert.notEqual(rejected.status, 0);
+  assert.match(`${rejected.stdout}\n${rejected.stderr}`, /GIT_COMMITTER_EMAIL.*overrides are forbidden/);
+});
+
+test("local signed-tag verification checks the exact ref, direct target, tagger and SSH key", async () => {
+  const fixture = localTagGit();
+  const result = await validateLocalSignedTag({
+    runGit: fixture.runGit,
+    sourceCommit: COMMIT,
+    tag: "v2.0.1",
+  });
+  assert.deepEqual(result, {
+    signingKey: {
+      algorithm: "ED25519",
+      fingerprint: releaseSigningKeyFingerprint,
+    },
+    sourceCommit: COMMIT,
+    tag: "v2.0.1",
+    tagObject: TAG_OBJECT,
+    tagger: {
+      email: "69587167+ejupi-djenis30@users.noreply.github.com",
+      name: "Djenis Ejupi",
+    },
+  });
+  assert.deepEqual(fixture.calls.at(0), [
+    "show-ref",
+    "--verify",
+    "--hash",
+    "refs/tags/v2.0.1",
+  ]);
+  assert.deepEqual(fixture.calls.at(-1), [
+    "verify-tag",
+    "--raw",
+    "refs/tags/v2.0.1",
+  ]);
+});
+
+test("local signed-tag verification rejects an identity introduced by a committer override", async () => {
+  const fixture = localTagGit({ taggerEmail: UNAPPROVED_TAGGER_EMAIL });
+  await assert.rejects(
+    () => validateLocalSignedTag({
+      runGit: fixture.runGit,
+      sourceCommit: COMMIT,
+      tag: "v2.0.1",
+    }),
+    /actual annotated tagger email differs from release policy/i,
+  );
+});
+
+test("local signed-tag verification rejects indirect targets and an unapproved signing key", async () => {
+  const indirect = localTagGit({ tagTarget: TAG_OBJECT });
+  await assert.rejects(
+    () => validateLocalSignedTag({
+      runGit: indirect.runGit,
+      sourceCommit: COMMIT,
+      tag: "v2.0.1",
+    }),
+    /does not directly target the reviewed commit/,
+  );
+
+  const wrongKey = localTagGit({ fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" });
+  await assert.rejects(
+    () => validateLocalSignedTag({
+      runGit: wrongKey.runGit,
+      sourceCommit: COMMIT,
+      tag: "v2.0.1",
+    }),
+    /was not verified with the release-policy SSH principal and key fingerprint/,
+  );
 });
 
 test("two independently assembled static candidates are byte-for-byte identical", async (context) => {

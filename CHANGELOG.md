@@ -12,8 +12,9 @@ Notable changes to VECTOR are recorded here.
   identical.
 - Leaves `v2.0.0` as an unpublished historical tag. Its corporate tagger email was not associated
   with a GitHub account, so GitHub correctly refused to verify it.
-- Adds a tracked tagger-identity policy and a preflight command that must pass before creating a
-  release tag.
+- Adds a tracked tagger and signing-key policy, rejects Git identity environment overrides before
+  tag creation, then verifies the exact local tag object, target, identity and SSH signature before
+  it can be pushed.
 
 ## 2.0.0 — 2026-07-22
 

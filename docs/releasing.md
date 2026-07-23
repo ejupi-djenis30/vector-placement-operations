@@ -16,7 +16,8 @@ A stable release is eligible for publication only when all of these statements a
 6. Every release asset matches `SHA256SUMS` and its GitHub build-provenance attestation.
 7. The GitHub Release becomes immutable. The publisher refuses to modify an existing published
    release or an unrelated draft.
-8. The annotated tagger name and email match `release-policy.json`.
+8. The annotated tagger name, email, SSH principal and signing-key fingerprint match
+   `release-policy.json`.
 
 The `.tar.gz` builder writes RFC 1952 operating-system value `255` (`unknown`) into the gzip header.
 The release gate compares an Ubuntu candidate with independent Ubuntu and Windows rebuilds, so a
@@ -80,9 +81,16 @@ node scripts/release-cli.mjs tag-preflight \
 git -c user.name='Djenis Ejupi' \
   -c user.email='69587167+ejupi-djenis30@users.noreply.github.com' \
   tag -s v2.0.1 <reviewed-commit> -m "VECTOR 2.0.1"
-git verify-tag v2.0.1
+node scripts/release-cli.mjs tag-verify \
+  --tag v2.0.1 \
+  --commit <reviewed-commit>
 git push origin refs/tags/v2.0.1:refs/tags/v2.0.1
 ```
+
+The preflight rejects `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`; those variables override
+Git configuration during annotated-tag creation. The post-creation verifier reads the exact local
+`refs/tags/v2.0.1` object, requires a direct commit target and checks the real tagger plus the
+cryptographic SSH principal and key fingerprint. Never push when either gate fails.
 
 The tag workflow repeats the complete candidate build. Publication is the final job and runs only for
 the tag event. It verifies the remote tag object and signature through the GitHub API, checks that the

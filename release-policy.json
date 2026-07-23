@@ -1,5 +1,9 @@
 {
-  "$schema": "https://ejupilabs.com/schemas/vector/release-policy/v1",
+  "$schema": "https://ejupilabs.com/schemas/vector/release-policy/v2",
+  "signingKey": {
+    "algorithm": "ED25519",
+    "fingerprint": "SHA256:vD5T1C1y72LRlZFUt8IiscOVuJ+x0+IKZ3C2yZ+h/hQ"
+  },
   "tagger": {
     "name": "Djenis Ejupi",
     "email": "69587167+ejupi-djenis30@users.noreply.github.com"

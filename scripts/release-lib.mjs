@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { constants } from "node:fs";
@@ -19,10 +20,12 @@ export const sourceCommitPattern = /^[0-9a-f]{40}$/;
 export const canonicalGzipOperatingSystem = 0xff;
 export const releaseTaggerName = "Djenis Ejupi";
 export const releaseTaggerEmail = "69587167+ejupi-djenis30@users.noreply.github.com";
+export const releaseSigningKeyAlgorithm = "ED25519";
+export const releaseSigningKeyFingerprint = "SHA256:vD5T1C1y72LRlZFUt8IiscOVuJ+x0+IKZ3C2yZ+h/hQ";
 
 const inventorySchema = "https://ejupilabs.com/schemas/vector/site-inventory/v1";
 const releaseSchema = "https://ejupilabs.com/schemas/vector/release-manifest/v1";
-const releasePolicySchema = "https://ejupilabs.com/schemas/vector/release-policy/v1";
+const releasePolicySchema = "https://ejupilabs.com/schemas/vector/release-policy/v2";
 const archiveRoot = (version) => `vector-placement-operations-${version}`;
 const gzipHeaderLength = 10;
 const gzipOperatingSystemOffset = 9;
@@ -79,7 +82,7 @@ function validateReleasePolicy(value) {
   assert.equal(value?.$schema, releasePolicySchema, "release-policy.json uses an unsupported schema.");
   assert.deepEqual(
     Object.keys(value).sort(),
-    ["$schema", "tagger"],
+    ["$schema", "signingKey", "tagger"],
     "release-policy.json contains unsupported top-level fields.",
   );
   assert.deepEqual(
@@ -89,7 +92,28 @@ function validateReleasePolicy(value) {
   );
   assert.equal(value.tagger.name, releaseTaggerName, "release-policy.json has an unexpected tagger name.");
   assert.equal(value.tagger.email, releaseTaggerEmail, "release-policy.json has an unexpected tagger email.");
-  return { email: value.tagger.email, name: value.tagger.name };
+  assert.deepEqual(
+    Object.keys(value.signingKey ?? {}).sort(),
+    ["algorithm", "fingerprint"],
+    "release-policy.json must define exactly one signing-key algorithm and fingerprint.",
+  );
+  assert.equal(
+    value.signingKey.algorithm,
+    releaseSigningKeyAlgorithm,
+    "release-policy.json has an unexpected signing-key algorithm.",
+  );
+  assert.equal(
+    value.signingKey.fingerprint,
+    releaseSigningKeyFingerprint,
+    "release-policy.json has an unexpected signing-key fingerprint.",
+  );
+  return {
+    signingKey: {
+      algorithm: value.signingKey.algorithm,
+      fingerprint: value.signingKey.fingerprint,
+    },
+    tagger: { email: value.tagger.email, name: value.tagger.name },
+  };
 }
 
 export async function validateReleaseMetadata({ tag } = {}) {
@@ -102,7 +126,7 @@ export async function validateReleaseMetadata({ tag } = {}) {
   ]);
   const packageJson = JSON.parse(packageText);
   const packageLock = JSON.parse(lockText);
-  const tagger = validateReleasePolicy(JSON.parse(policyText));
+  const policy = validateReleasePolicy(JSON.parse(policyText));
   const version = packageJson.version;
 
   assert.match(version, stableVersionPattern, "package.json must declare a stable semantic version.");
@@ -123,9 +147,23 @@ export async function validateReleaseMetadata({ tag } = {}) {
     date: section.date,
     name: packageJson.name,
     notes: section.notes,
-    tagger,
+    signingKey: policy.signingKey,
+    tagger: policy.tagger,
     version,
   };
+}
+
+export function assertCleanTaggerEnvironment(environment = process.env) {
+  const reserved = new Set(["GIT_COMMITTER_EMAIL", "GIT_COMMITTER_NAME"]);
+  const overrides = Object.keys(environment)
+    .filter((name) => reserved.has(name.toUpperCase()))
+    .map((name) => name.toUpperCase())
+    .sort();
+  assert.equal(
+    overrides.length,
+    0,
+    `Unset ${overrides.join(" and ")} before creating a release tag; Git environment identity overrides are forbidden.`,
+  );
 }
 
 export async function validateTagPreflight({
@@ -146,6 +184,118 @@ export async function validateTagPreflight({
     tag,
     tagger: metadata.tagger,
     version: metadata.version,
+  };
+}
+
+function executeGit(arguments_) {
+  const result = spawnSync("git", arguments_, {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: process.env,
+    windowsHide: true,
+  });
+  assert.ifError(result.error);
+  const diagnostic = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+  assert.equal(
+    result.status,
+    0,
+    `git ${arguments_[0]} failed${diagnostic === "" ? "." : `: ${diagnostic}`}`,
+  );
+  return { stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
+}
+
+function gitOutput(runGit, arguments_) {
+  const result = runGit(arguments_);
+  assert.equal(typeof result, "object", `git ${arguments_[0]} returned no result.`);
+  assert.equal(typeof result.stdout, "string", `git ${arguments_[0]} returned non-text stdout.`);
+  assert.equal(typeof result.stderr, "string", `git ${arguments_[0]} returned non-text stderr.`);
+  return result;
+}
+
+function singleLine(value, description) {
+  const lines = value.trim().split(/\r?\n/);
+  assert.equal(lines.length, 1, `${description} must contain exactly one line.`);
+  assert.notEqual(lines[0], "", `${description} must not be empty.`);
+  return lines[0];
+}
+
+function annotatedTagHeaders(value) {
+  const headerText = value.split(/\r?\n\r?\n/, 1)[0];
+  const values = new Map();
+  for (const line of headerText.split(/\r?\n/)) {
+    const separator = line.indexOf(" ");
+    assert.ok(separator > 0, `Malformed annotated-tag header: ${line}`);
+    const key = line.slice(0, separator);
+    assert.equal(values.has(key), false, `Duplicate annotated-tag header: ${key}`);
+    values.set(key, line.slice(separator + 1));
+  }
+  assert.deepEqual(
+    [...values.keys()].sort(),
+    ["object", "tag", "tagger", "type"],
+    "Annotated release tag contains unexpected or missing headers.",
+  );
+  return values;
+}
+
+export async function validateLocalSignedTag({
+  runGit = executeGit,
+  sourceCommit,
+  tag,
+} = {}) {
+  assert.equal(typeof tag, "string", "Local tag verification requires a tag.");
+  assert.match(sourceCommit, sourceCommitPattern, "Local tag verification requires a lowercase 40-character commit.");
+  const metadata = await validateReleaseMetadata({ tag });
+  const ref = `refs/tags/${tag}`;
+
+  const tagObject = singleLine(
+    gitOutput(runGit, ["show-ref", "--verify", "--hash", ref]).stdout,
+    "Annotated tag object ID",
+  );
+  assert.match(tagObject, sourceCommitPattern, "Annotated tag object ID must be a lowercase 40-character object ID.");
+  assert.equal(
+    singleLine(gitOutput(runGit, ["cat-file", "-t", tagObject]).stdout, "Tag object type"),
+    "tag",
+    `${ref} must point to an annotated tag object.`,
+  );
+
+  const headers = annotatedTagHeaders(gitOutput(runGit, ["cat-file", "-p", tagObject]).stdout);
+  assert.equal(headers.get("object"), sourceCommit, `${ref} does not directly target the reviewed commit.`);
+  assert.equal(headers.get("type"), "commit", `${ref} must directly target a commit, not another tag.`);
+  assert.equal(headers.get("tag"), tag, `${ref} embeds a different tag name.`);
+  const tagger = headers.get("tagger").match(/^(.+) <([^<>\r\n]+)> ([0-9]+) ([+-][0-9]{4})$/);
+  assert.ok(tagger, `${ref} has a malformed annotated tagger header.`);
+  assert.equal(tagger[1], metadata.tagger.name, "The actual annotated tagger name differs from release policy.");
+  assert.equal(tagger[2], metadata.tagger.email, "The actual annotated tagger email differs from release policy.");
+
+  assert.equal(
+    singleLine(gitOutput(runGit, ["cat-file", "-t", sourceCommit]).stdout, "Release target object type"),
+    "commit",
+    "The reviewed release target is not a commit.",
+  );
+  assert.equal(
+    singleLine(gitOutput(runGit, ["rev-parse", "--verify", `${ref}^{}`]).stdout, "Peeled tag target"),
+    sourceCommit,
+    `${ref} does not peel to the reviewed commit.`,
+  );
+
+  const verification = gitOutput(runGit, ["verify-tag", "--raw", ref]);
+  const signatureLines = `${verification.stdout}\n${verification.stderr}`
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('Good "git" signature for '));
+  const expectedSignature = `Good "git" signature for ${metadata.tagger.email} with ` +
+    `${metadata.signingKey.algorithm} key ${metadata.signingKey.fingerprint}`;
+  assert.deepEqual(
+    signatureLines,
+    [expectedSignature],
+    "The annotated tag was not verified with the release-policy SSH principal and key fingerprint.",
+  );
+
+  return {
+    signingKey: metadata.signingKey,
+    sourceCommit,
+    tag,
+    tagObject,
+    tagger: metadata.tagger,
   };
 }
 
