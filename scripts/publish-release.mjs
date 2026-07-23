@@ -141,12 +141,14 @@ class GitHubClient {
   }
 }
 
-export function verifyRemoteSource({ tagRef, tagObject, branchRef, tag, sourceCommit }) {
+export function verifyRemoteSource({ tagRef, tagObject, branchRef, tag, sourceCommit, tagger }) {
   assert.equal(tagRef?.ref, `refs/tags/${tag}`, "GitHub returned a different tag reference.");
   assert.equal(tagRef?.object?.type, "tag", "Stable releases require an annotated tag object.");
   assert.equal(tagObject?.sha, tagRef.object.sha, "The annotated tag object changed during verification.");
   assert.equal(tagObject?.tag, tag, "The annotated tag name differs from the release tag.");
   assert.equal(tagObject?.verification?.verified, true, "The annotated tag signature is not GitHub-verified.");
+  assert.equal(tagObject?.tagger?.name, tagger.name, "The annotated tagger name differs from release policy.");
+  assert.equal(tagObject?.tagger?.email, tagger.email, "The annotated tagger email differs from release policy.");
   assert.equal(tagObject?.object?.type, "commit", "The annotated tag must point directly to a commit.");
   assert.equal(tagObject?.object?.sha, sourceCommit, "The annotated tag points to a different commit.");
   assert.equal(branchRef?.object?.type, "commit", "The default branch does not resolve to a commit.");
@@ -218,7 +220,14 @@ async function verifiedRemoteSource(client, values) {
   const tagRef = await client.tagRef(values.tag);
   const tagObject = await client.tagObject(tagRef?.object?.sha);
   const branchRef = await client.branchRef(values.defaultBranch);
-  verifyRemoteSource({ tagRef, tagObject, branchRef, tag: values.tag, sourceCommit: values.sourceCommit });
+  verifyRemoteSource({
+    tagRef,
+    tagObject,
+    branchRef,
+    tag: values.tag,
+    sourceCommit: values.sourceCommit,
+    tagger: values.tagger,
+  });
 }
 
 export async function publishReleaseCandidate({
@@ -256,7 +265,7 @@ export async function publishReleaseCandidate({
     title: `VECTOR ${metadata.version}`,
   };
 
-  await verifiedRemoteSource(client, { tag, defaultBranch, sourceCommit });
+  await verifiedRemoteSource(client, { tag, defaultBranch, sourceCommit, tagger: metadata.tagger });
   let release = await client.releaseByTag(tag);
   if (release?.draft === false) {
     verifyPublishedRelease(release, contract, assets);
@@ -288,7 +297,7 @@ export async function publishReleaseCandidate({
   validateOwnedDraft(release, contract, assets);
   verifyAssets(assets, release);
 
-  await verifiedRemoteSource(client, { tag, defaultBranch, sourceCommit });
+  await verifiedRemoteSource(client, { tag, defaultBranch, sourceCommit, tagger: metadata.tagger });
   try {
     await client.updateRelease(release.id, { draft: false, make_latest: "true" });
   } catch (error) {
@@ -305,7 +314,7 @@ export async function publishReleaseCandidate({
   verifyPublishedRelease(published, contract, assets);
   const latest = await client.latestRelease();
   assert.equal(latest.id, published.id, "The immutable release is not GitHub's latest release.");
-  await verifiedRemoteSource(client, { tag, defaultBranch, sourceCommit });
+  await verifiedRemoteSource(client, { tag, defaultBranch, sourceCommit, tagger: metadata.tagger });
   return published;
 }
 

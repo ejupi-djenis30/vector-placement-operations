@@ -58,10 +58,10 @@ archives. The release also includes a file inventory, a CycloneDX SBOM, source-c
 SHA-256 checksums. GitHub build-provenance attestations bind every published asset to the tagged
 source commit.
 
-The release workflow accepts only an annotated, GitHub-verified `v<version>` tag at the current
-default-branch commit. It builds the candidate twice and compares both copies byte for byte before
-publication. See [the release guide](docs/releasing.md) for the rehearsal and verification commands,
-and [the changelog](CHANGELOG.md) for version history.
+The release workflow accepts only an annotated, GitHub-verified `v<version>` tag from the tracked
+tagger identity at the current default-branch commit. It compares independent Ubuntu and Windows
+builds byte for byte before publication. See [the release guide](docs/releasing.md) for the preflight,
+rehearsal and verification commands, and [the changelog](CHANGELOG.md) for version history.
 
 ## Project policies
 

@@ -16,10 +16,19 @@ A stable release is eligible for publication only when all of these statements a
 6. Every release asset matches `SHA256SUMS` and its GitHub build-provenance attestation.
 7. The GitHub Release becomes immutable. The publisher refuses to modify an existing published
    release or an unrelated draft.
+8. The annotated tagger name, email, SSH principal and signing-key fingerprint match
+   `release-policy.json`.
 
 The `.tar.gz` builder writes RFC 1952 operating-system value `255` (`unknown`) into the gzip header.
 The release gate compares an Ubuntu candidate with independent Ubuntu and Windows rebuilds, so a
 host-specific gzip header or checkout transformation cannot pass as reproducible.
+
+## 2.0.1 recovery
+
+The immutable `v2.0.0` tag remains as an unpublished historical marker. Its corporate tagger email
+was not associated with a GitHub account, so GitHub could not verify the otherwise valid signature
+and the publisher failed closed. Do not delete, move, reuse or rerun that tag. Version 2.0.1 carries
+the same browser runtime forward and adds the tagger-identity preflight; there is no runtime change.
 
 ## Local candidate
 
@@ -47,7 +56,7 @@ On Windows PowerShell, replace `$(git rev-parse HEAD)` with the output of `git r
 ## Rehearsal
 
 Run **Release readiness** manually with `expected_tag` set to the intended stable tag, for example
-`v2.0.0`. A rehearsal builds, tests, inventories and reproduces the full candidate, but the publish
+`v2.0.1`. A rehearsal builds, tests, inventories and reproduces the full candidate, but the publish
 job remains skipped because the event is not a tag push.
 
 Download the `vector-release-candidate` workflow artifact and verify it locally:
@@ -60,13 +69,28 @@ sha256sum --check release/SHA256SUMS
 ## Publication
 
 After the rehearsal passes, create a signed annotated tag locally at the exact reviewed default-branch
-commit. Never rewrite or reuse a published tag.
+commit. Never rewrite or reuse an existing tag. Run the tracked identity preflight with the same
+name and email that will be embedded in the annotated tag:
 
 ```bash
-git tag -s v2.0.0 <reviewed-commit> -m "VECTOR 2.0.0"
-git verify-tag v2.0.0
-git push origin refs/tags/v2.0.0:refs/tags/v2.0.0
+node scripts/release-cli.mjs tag-preflight \
+  --tag v2.0.1 \
+  --commit <reviewed-commit> \
+  --tagger-name "Djenis Ejupi" \
+  --tagger-email "69587167+ejupi-djenis30@users.noreply.github.com"
+git -c user.name='Djenis Ejupi' \
+  -c user.email='69587167+ejupi-djenis30@users.noreply.github.com' \
+  tag -s v2.0.1 <reviewed-commit> -m "VECTOR 2.0.1"
+node scripts/release-cli.mjs tag-verify \
+  --tag v2.0.1 \
+  --commit <reviewed-commit>
+git push origin refs/tags/v2.0.1:refs/tags/v2.0.1
 ```
+
+The preflight rejects `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`; those variables override
+Git configuration during annotated-tag creation. The post-creation verifier reads the exact local
+`refs/tags/v2.0.1` object, requires a direct commit target and checks the real tagger plus the
+cryptographic SSH principal and key fingerprint. Never push when either gate fails.
 
 The tag workflow repeats the complete candidate build. Publication is the final job and runs only for
 the tag event. It verifies the remote tag object and signature through the GitHub API, checks that the
@@ -83,7 +107,7 @@ the checksum and GitHub provenance:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify vector-site-2.0.0.tar.gz \
+gh attestation verify vector-site-2.0.1.tar.gz \
   --repo ejupi-djenis30/vector-placement-operations \
   --signer-workflow ejupi-djenis30/vector-placement-operations/.github/workflows/release.yml
 ```

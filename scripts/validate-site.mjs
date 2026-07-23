@@ -23,17 +23,19 @@ async function listFiles(directory, prefix = "") {
   return files;
 }
 
-const [html, styles, app, readme, security, packageText, socialPreview, socialPreviewPng] = await Promise.all([
+const [html, styles, app, readme, security, packageText, releasePolicyText, socialPreview, socialPreviewPng] = await Promise.all([
   readFile(new URL("index.html", siteRoot), "utf8"),
   readFile(new URL("styles.css", siteRoot), "utf8"),
   readFile(new URL("app.mjs", siteRoot), "utf8"),
   readFile(new URL("README.md", repositoryRoot), "utf8"),
   readFile(new URL("SECURITY.md", repositoryRoot), "utf8"),
   readFile(new URL("package.json", repositoryRoot), "utf8"),
+  readFile(new URL("release-policy.json", repositoryRoot), "utf8"),
   readFile(new URL("assets/social-preview.svg", siteRoot), "utf8"),
   readFile(new URL("assets/social-preview.png", siteRoot)),
 ]);
 const packageJson = JSON.parse(packageText);
+const releasePolicy = JSON.parse(releasePolicyText);
 
 for (const file of [
   "styles.css",
@@ -132,7 +134,12 @@ const textFiles = repositoryFiles.filter((file) =>
 const repositoryText = (await Promise.all(
   textFiles.map((file) => readFile(new URL(file.replaceAll("\\", "/"), repositoryRoot), "utf8")),
 )).join("\n");
-assert(!/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(repositoryText), "A personal or operational email address is present.");
+const repositoryEmails = [...repositoryText.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)]
+  .map(([email]) => email.toLocaleLowerCase("en"));
+assert(
+  repositoryEmails.every((email) => email === releasePolicy.tagger.email.toLocaleLowerCase("en")),
+  "A personal or operational email address is present.",
+);
 assert(!/[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]/i.test(repositoryText), "An Italian tax identifier is present.");
 assert(!/\+\d[\d .()-]{7,}\d/.test(repositoryText), "A phone number is present.");
 assert(

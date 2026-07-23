@@ -1,6 +1,6 @@
 {
   "name": "vector-placement-operations",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "type": "module",
   "description": "An interactive placement operations workspace built with synthetic data and local-only browser storage.",
@@ -21,6 +21,8 @@
     "test:e2e": "playwright test",
     "check:site": "node scripts/validate-site.mjs",
     "check:release": "node scripts/release-cli.mjs metadata",
+    "release:tag-preflight": "node scripts/release-cli.mjs tag-preflight",
+    "release:tag-verify": "node scripts/release-cli.mjs tag-verify",
     "release:build": "node scripts/release-cli.mjs build --output release",
     "release:verify": "node scripts/release-cli.mjs verify --directory release",
     "check": "npm test && npm run check:site && npm run check:release"
