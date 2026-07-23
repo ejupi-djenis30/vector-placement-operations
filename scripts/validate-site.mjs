@@ -23,10 +23,11 @@ async function listFiles(directory, prefix = "") {
   return files;
 }
 
-const [html, styles, app, readme, security, packageText, releasePolicyText, socialPreview, socialPreviewPng] = await Promise.all([
+const [html, styles, app, robots, readme, security, packageText, releasePolicyText, socialPreview, socialPreviewPng] = await Promise.all([
   readFile(new URL("index.html", siteRoot), "utf8"),
   readFile(new URL("styles.css", siteRoot), "utf8"),
   readFile(new URL("app.mjs", siteRoot), "utf8"),
+  readFile(new URL("robots.txt", siteRoot), "utf8"),
   readFile(new URL("README.md", repositoryRoot), "utf8"),
   readFile(new URL("SECURITY.md", repositoryRoot), "utf8"),
   readFile(new URL("package.json", repositoryRoot), "utf8"),
@@ -108,6 +109,19 @@ assert(
 );
 assert(!/\.style\s*\./.test(app), "Application code must not create CSP-blocked inline styles.");
 assert(/<progress\b/.test(app), "The placement progress indicator must use the native progress element.");
+assert(
+  robots === "User-agent: *\nAllow: /\n",
+  "robots.txt must explicitly allow crawlers with a stable UTF-8 payload.",
+);
+
+for (const token of [
+  "--coral-bright:#ff7563",
+  ".metrics .metric-accent>span,.metrics .metric-accent small{color:var(--paper)}",
+  "color:rgba(245,239,229,.7)",
+  "color:rgba(245,239,229,.64)",
+]) {
+  assert(styles.includes(token), `styles.css is missing the contrast-safe token ${token}`);
+}
 
 const presentationText = `${html}\n${styles}\n${readme}\n${security}`;
 const retiredCopy = ["publication", " hold", "local", " preview", "held for", " history cleanup"];
@@ -165,6 +179,12 @@ for (const file of [
 ]) {
   await stat(new URL(file, repositoryRoot));
 }
+
+const siteServer = await readFile(new URL("scripts/serve-site.mjs", repositoryRoot), "utf8");
+assert(
+  siteServer.includes('[".txt", "text/plain; charset=utf-8"]'),
+  "The local publication server must serve robots.txt as UTF-8 plain text.",
+);
 
 const rootEntries = await readdir(repositoryRoot, { withFileTypes: true });
 assert(

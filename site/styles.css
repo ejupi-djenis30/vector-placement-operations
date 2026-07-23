@@ -12,10 +12,10 @@ footer{display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;align-items:cent
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 
 /* Contrast-safe interface tokens; the brighter coral is reserved for dark decorative panels. */
-:root{--coral:#bc3c2c;--blue:#38688e;--green:#3b735b;--slate:#5f6a72;--muted:#666c6f;--coral-bright:#ff6b56}
+:root{--coral:#bc3c2c;--blue:#38688e;--green:#3b735b;--slate:#5f6a72;--muted:#666c6f;--coral-bright:#ff7563}
 :focus-visible{outline-color:var(--paper);box-shadow:0 0 0 6px var(--navy)}
 .privacy-card span{color:var(--coral-bright)}
-.metric-accent>span,.metric-accent small{color:var(--paper)}
+.metrics .metric-accent>span,.metrics .metric-accent small{color:var(--paper)}
 .status-coral{color:var(--coral)}
 
 /* A measured placement path: equal modules, one axis and no decorative overflow. */
@@ -118,7 +118,7 @@ footer{display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;align-items:cent
   font-weight:900;
 }
 .flow-step small{
-  color:rgba(245,239,229,.48);
+  color:rgba(245,239,229,.7);
   font-family:ui-monospace,Consolas,monospace;
   font-size:clamp(.43rem,.86vw,.53rem);
   font-weight:800;
@@ -164,7 +164,7 @@ footer{display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;align-items:cent
 }
 .progress-rail span{display:block;width:40%;height:100%;border-radius:inherit;background:var(--coral-bright)}
 .progress-scale{
-  color:rgba(245,239,229,.42);
+  color:rgba(245,239,229,.64);
   font-family:ui-monospace,Consolas,monospace;
   font-size:clamp(.43rem,.82vw,.51rem);
   letter-spacing:.08em;
@@ -172,7 +172,7 @@ footer{display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;align-items:cent
 .progress-scale b{color:var(--paper);font-size:inherit}
 .board-foot{
   margin:0;
-  color:rgba(245,239,229,.43);
+  color:rgba(245,239,229,.64);
   font-family:ui-monospace,Consolas,monospace;
   font-size:clamp(.43rem,.85vw,.53rem);
   font-weight:750;
