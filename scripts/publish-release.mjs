@@ -81,9 +81,10 @@ function assertUploadUrl(uploadUrl, repository, releaseId) {
   return parsed;
 }
 
-class GitHubClient {
-  constructor(repository) {
+export class GitHubClient {
+  constructor(repository, run = runGitHub) {
     this.repository = repository;
+    this.run = run;
   }
 
   tagRef(tag) {
@@ -124,20 +125,18 @@ class GitHubClient {
 
   async uploadAsset(release, asset) {
     assert.ok(typeof process.env.GH_TOKEN === "string" && process.env.GH_TOKEN !== "", "GH_TOKEN is required.");
-    const uploadUrl = assertUploadUrl(release.upload_url, this.repository, release.id);
-    uploadUrl.searchParams.set("name", asset.name);
+    assertUploadUrl(release.upload_url, this.repository, release.id);
+    assert.equal(asset.path, resolve(asset.path), `Release asset path must be absolute: ${asset.name}`);
     const args = [
-      "api",
-      "--method=POST",
-      uploadUrl.href,
-      "-H", "Accept: application/vnd.github+json",
-      "-H", "Content-Type: application/octet-stream",
-      "-H", `X-GitHub-Api-Version: ${apiVersion}`,
-      "--input", "-",
+      "release",
+      "upload",
+      release.tag_name,
+      asset.path,
+      "--repo",
+      this.repository,
     ];
-    const result = runGitHub(args, asset.bytes);
+    const result = this.run(args);
     if (result.status !== 0) throw commandError(args, result);
-    return JSON.parse(result.stdout);
   }
 }
 
@@ -203,9 +202,8 @@ function validateOwnedDraft(release, contract, expected) {
     const local = byName.get(asset.name);
     assert.ok(local, `GitHub draft contains a foreign asset: ${asset.name}`);
     assert.equal(asset.size, local.size, `GitHub draft contains a size-mismatched asset: ${asset.name}`);
-    if (asset.digest !== null && asset.digest !== undefined) {
-      assert.equal(asset.digest, local.digest, `GitHub draft contains a digest-mismatched asset: ${asset.name}`);
-    }
+    assert.match(asset.digest ?? "", /^sha256:[0-9a-f]{64}$/, `GitHub draft has no usable digest: ${asset.name}`);
+    assert.equal(asset.digest, local.digest, `GitHub draft contains a digest-mismatched asset: ${asset.name}`);
   }
 }
 
@@ -254,6 +252,7 @@ export async function publishReleaseCandidate({
 
   const assets = (await releaseAssetManifest(directory)).map((asset) => ({
     ...asset,
+    path: resolve(directory, asset.name),
   }));
   const checksum = assets.find(({ name }) => name === "SHA256SUMS");
   assert.ok(checksum, "Release candidate is missing SHA256SUMS.");
@@ -287,12 +286,14 @@ export async function publishReleaseCandidate({
   }
   validateOwnedDraft(release, contract, assets);
 
-  for (const asset of remoteAssets(release)) await client.deleteAsset(asset.id);
-  release = await client.releaseById(release.id);
-  validateOwnedDraft(release, contract, assets);
-  assert.equal(release.assets.length, 0, "GitHub draft was not empty before upload.");
-
-  for (const asset of assets) await client.uploadAsset(release, asset);
+  const uploadedNames = new Set(remoteAssets(release).map((asset) => asset.name));
+  for (const asset of assets) {
+    if (uploadedNames.has(asset.name)) continue;
+    await client.uploadAsset(release, asset);
+    release = await client.releaseById(release.id);
+    validateOwnedDraft(release, contract, assets);
+    uploadedNames.add(asset.name);
+  }
   release = await client.releaseById(release.id);
   validateOwnedDraft(release, contract, assets);
   verifyAssets(assets, release);
