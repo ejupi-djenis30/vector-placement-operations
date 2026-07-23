@@ -96,6 +96,8 @@ The tag workflow repeats the complete candidate build. Publication is the final 
 the tag event. It verifies the remote tag object and signature through the GitHub API, checks that the
 tag still equals the default-branch head, attests the checksummed assets, uploads an exact draft and
 publishes it. The workflow then requires GitHub to report the release as immutable.
+If a verified draft already contains part of the candidate, the publisher keeps only byte-exact
+assets and uploads the missing files. It never deletes draft assets during recovery.
 
 If source or workflow changes are needed after a tag is published, prepare the next patch version.
 Do not move or delete the existing release.

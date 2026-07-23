@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 import { buildReleaseCandidate } from "../scripts/release-lib.mjs";
-import { publishReleaseCandidate } from "../scripts/publish-release.mjs";
+import { GitHubClient, publishReleaseCandidate } from "../scripts/publish-release.mjs";
 
 const COMMIT = "b".repeat(40);
 const TAG_SHA = "c".repeat(40);
@@ -123,6 +123,46 @@ function publish(directory, client) {
   });
 }
 
+test("GitHub client uploads a file with the release command's length-aware transport", async (context) => {
+  const previousToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token";
+  context.after(() => {
+    if (previousToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = previousToken;
+  });
+  const calls = [];
+  const client = new GitHubClient(
+    "ejupi-djenis30/vector-placement-operations",
+    (args, input) => {
+      calls.push({ args, input });
+      return { status: 0, stderr: "", stdout: "" };
+    },
+  );
+  const path = resolve("release", "VECTOR.zip");
+
+  await client.uploadAsset(
+    {
+      id: 7,
+      tag_name: "v2.0.1",
+      upload_url:
+        "https://uploads.github.com/repos/ejupi-djenis30/vector-placement-operations/releases/7/assets{?name,label}",
+    },
+    { name: "VECTOR.zip", path },
+  );
+
+  assert.deepEqual(calls, [{
+    args: [
+      "release",
+      "upload",
+      "v2.0.1",
+      path,
+      "--repo",
+      "ejupi-djenis30/vector-placement-operations",
+    ],
+    input: undefined,
+  }]);
+});
+
 test("publisher promotes only the verified candidate and is idempotent afterward", async (context) => {
   const directory = await fixture(context);
   const client = new FakeGitHub();
@@ -132,10 +172,46 @@ test("publisher promotes only the verified candidate and is idempotent afterward
   assert.equal(release.assets.length, 8);
   assert.deepEqual(client.mutations.slice(0, 1), ["create"]);
   assert.equal(client.mutations.at(-1), "publish");
+  assert.equal(client.mutations.some((mutation) => mutation.startsWith("delete:")), false);
 
   const count = client.mutations.length;
   await publish(directory, client);
   assert.equal(client.mutations.length, count, "An existing exact immutable release must not be mutated.");
+});
+
+test("publisher resumes an exact partial draft without deleting verified assets", async (context) => {
+  const directory = await fixture(context);
+  const client = new FakeGitHub();
+  await publish(directory, client);
+  client.release.draft = true;
+  client.release.immutable = false;
+  client.release.assets = client.release.assets.slice(0, 3);
+  client.latest = null;
+  client.mutations = [];
+
+  const release = await publish(directory, client);
+
+  assert.equal(release.draft, false);
+  assert.equal(release.immutable, true);
+  assert.equal(release.assets.length, 8);
+  assert.equal(client.mutations.filter((mutation) => mutation.startsWith("upload:")).length, 5);
+  assert.equal(client.mutations.some((mutation) => mutation.startsWith("delete:")), false);
+  assert.equal(client.mutations.at(-1), "publish");
+});
+
+test("publisher rejects a digest-mismatched partial draft before mutation", async (context) => {
+  const directory = await fixture(context);
+  const client = new FakeGitHub();
+  await publish(directory, client);
+  client.release.draft = true;
+  client.release.immutable = false;
+  client.release.assets = client.release.assets.slice(0, 1);
+  client.release.assets[0].digest = `sha256:${"0".repeat(64)}`;
+  client.latest = null;
+  client.mutations = [];
+
+  await assert.rejects(() => publish(directory, client), /digest-mismatched asset/);
+  assert.deepEqual(client.mutations, []);
 });
 
 test("publisher rejects an unverified tag before any mutation", async (context) => {
