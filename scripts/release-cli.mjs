@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   assertCleanTaggerEnvironment,
+  acceptReleaseCandidate,
   buildReleaseCandidate,
   compareReleaseCandidates,
   validateLocalSignedTag,
@@ -31,7 +32,15 @@ function sourceCommit(options) {
 
 const [command = "metadata", ...values] = process.argv.slice(2);
 const options = argumentsFor(values);
-const allowed = new Set(["metadata", "tag-preflight", "tag-verify", "build", "verify", "compare"]);
+const allowed = new Set([
+  "metadata",
+  "tag-preflight",
+  "tag-verify",
+  "build",
+  "verify",
+  "compare",
+  "accept",
+]);
 assert.ok(allowed.has(command), `Unknown release command: ${command}`);
 const commandOptions = {
   metadata: new Set(["--tag"]),
@@ -40,6 +49,7 @@ const commandOptions = {
   build: new Set(["--commit", "--output", "--tag"]),
   verify: new Set(["--commit", "--directory", "--tag"]),
   compare: new Set(["--commit", "--directory", "--other-directory", "--tag"]),
+  accept: new Set(["--commit", "--directory", "--tag"]),
 };
 for (const key of options.keys()) assert.ok(commandOptions[command].has(key), `${command} does not accept ${key}.`);
 const tag = options.get("--tag");
@@ -84,7 +94,7 @@ if (command === "metadata") {
     tag,
   });
   console.log(`VECTOR ${result.version} release candidate verified.`);
-} else {
+} else if (command === "compare") {
   const directory = options.get("--directory");
   const otherDirectory = options.get("--other-directory");
   assert.ok(directory && otherDirectory, "compare requires --directory and --other-directory.");
@@ -95,4 +105,13 @@ if (command === "metadata") {
     tag,
   });
   console.log(`VECTOR ${result.version} release candidates are byte-for-byte identical.`);
+} else {
+  const directory = options.get("--directory");
+  assert.ok(directory, "accept requires --directory.");
+  const result = await acceptReleaseCandidate({
+    directory,
+    sourceCommit: options.has("--commit") ? sourceCommit(options) : undefined,
+    tag,
+  });
+  console.log(`VECTOR ${result.version} extracted release candidate passed acceptance.`);
 }

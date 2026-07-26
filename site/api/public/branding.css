@@ -1,0 +1,10 @@
+/* Fallback identity for the public GitHub Pages presentation.
+   A self-hosted VECTOR installation serves this same path from its API with runtime branding. */
+:root {
+  --primary: #17324d;
+  --accent: #bc3c2c;
+  --surface: #f5efe5;
+  --on-primary: #ffffff;
+  --on-accent: #ffffff;
+  --on-surface: #17324d;
+}

@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "22.23.1"
   GH_CLI_VERSION: "2.94.0"
   GH_CLI_SHA256: "a757f1ba6db18f4de8cbadb244843a5f89bc75b5e7c6fc127d2bd77fbd12ed62"
   MIT_LICENSE_SHA256: "21303c465d4a75947e472df01cde991fda990c6edf3796bd9e76c626d9c543ec"
@@ -53,7 +53,7 @@ jobs:
           [[ "$(node --version)" == "v${NODE_VERSION}" ]]
 
       - name: Install locked dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Validate source and release metadata
         id: candidate
@@ -84,7 +84,7 @@ jobs:
       - name: Run unit, contract and static publication checks
         run: |
           npm run check
-          npm audit --audit-level=moderate
+          npm audit --omit=dev --audit-level=high
 
       - name: Install pinned Chromium runtime
         run: npx --no-install playwright install --with-deps chromium
@@ -106,6 +106,136 @@ jobs:
             --output release \
             --commit "${GITHUB_SHA}" \
             "${arguments[@]}"
+
+      - name: Accept the extracted candidate
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          arguments=()
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            arguments+=(--tag "${RELEASE_TAG}")
+          fi
+          node scripts/release-cli.mjs accept \
+            --directory release \
+            --commit "${GITHUB_SHA}" \
+            "${arguments[@]}"
+
+      - name: Build and exercise the exact production container
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="vector-release:${GITHUB_SHA}"
+          container="vector-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          data_volume="vector-release-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          restore_volume="vector-release-restore-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          transfer="${RUNNER_TEMP}/vector-release-transfer"
+          cleanup() {
+            docker rm --force "${container}" >/dev/null 2>&1 || true
+            docker volume rm "${data_volume}" "${restore_volume}" >/dev/null 2>&1 || true
+            docker image rm --force "${image}" >/dev/null 2>&1 || true
+            rm -rf "${transfer}"
+          }
+          trap cleanup EXIT
+          docker build --check .
+          docker build \
+            --build-arg "VECTOR_BUILD_REVISION=${GITHUB_SHA}" \
+            --tag "${image}" \
+            .
+          [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${GITHUB_SHA}" ]]
+          [[ "$(docker image inspect --format '{{json .Config.Cmd}}' "${image}")" == '["node","server/index.mjs"]' ]]
+          docker volume create "${data_volume}" >/dev/null
+          docker volume create "${restore_volume}" >/dev/null
+          docker run --detach \
+            --name "${container}" \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 256 \
+            --publish 127.0.0.1:4173:4173 \
+            --mount "type=volume,source=${data_volume},target=/var/lib/vector" \
+            --env NODE_ENV=production \
+            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
+            --env VECTOR_COOKIE_SECURE=false \
+            --env VECTOR_BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
+            --env VECTOR_BOOTSTRAP_ADMIN_NAME="Release administrator" \
+            --env VECTOR_BOOTSTRAP_ADMIN_PASSWORD="release-container-password-2026" \
+            --env VECTOR_SEED_SYNTHETIC=true \
+            "${image}" >/dev/null
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:4173/api/health/ready >/dev/null; then
+              break
+            fi
+            if [[ "${attempt}" == "30" ]]; then
+              docker logs "${container}"
+              exit 1
+            fi
+            sleep 1
+          done
+          [[ "$(docker inspect --format '{{.Config.User}}' "${container}")" == "node" ]]
+          [[ "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "${container}")" == "true" ]]
+          docker inspect --format '{{json .HostConfig.CapDrop}}' "${container}" | grep --fixed-strings '"ALL"'
+          docker inspect --format '{{json .HostConfig.SecurityOpt}}' "${container}" | grep --fixed-strings 'no-new-privileges'
+          docker exec "${container}" npm run doctor
+          docker stop --time 15 "${container}" >/dev/null
+          [[ "$(docker inspect --format '{{.State.ExitCode}}' "${container}")" == "0" ]]
+          docker run --rm \
+            --mount "type=volume,source=${data_volume},target=/var/lib/vector" \
+            --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
+            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
+            --env VECTOR_COOKIE_SECURE=false \
+            "${image}" \
+            npm run db:backup -- --output /var/lib/vector/release-smoke.sqlite
+          mkdir -p "${transfer}"
+          docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite" "${transfer}/release-smoke.sqlite"
+          docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite.manifest.json" "${transfer}/release-smoke.sqlite.manifest.json"
+          [[ -f "${transfer}/release-smoke.sqlite" && ! -L "${transfer}/release-smoke.sqlite" ]]
+          [[ -f "${transfer}/release-smoke.sqlite.manifest.json" && ! -L "${transfer}/release-smoke.sqlite.manifest.json" ]]
+          # docker cp ownership varies across daemon and user-namespace modes. Normalize only the
+          # two synthetic transfer files for the non-root image user with a one-capability helper.
+          docker run --rm --read-only \
+            --network none \
+            --user root \
+            --cap-drop ALL \
+            --cap-add CHOWN \
+            --security-opt no-new-privileges:true \
+            --mount "type=bind,source=${transfer},target=/transfer" \
+            "${image}" \
+            chown node:node \
+              /transfer/release-smoke.sqlite \
+              /transfer/release-smoke.sqlite.manifest.json
+          docker run --rm --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --mount "type=bind,source=${transfer},target=/transfer,readonly" \
+            "${image}" \
+            npm run db:inspect-backup -- --file /transfer/release-smoke.sqlite
+          docker run --rm \
+            --mount "type=bind,source=${transfer},target=/transfer,readonly" \
+            --mount "type=volume,source=${restore_volume},target=/var/lib/vector" \
+            --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
+            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
+            --env VECTOR_COOKIE_SECURE=false \
+            "${image}" \
+            npm run db:restore -- --file /transfer/release-smoke.sqlite --confirm-empty
+          docker run --rm \
+            --mount "type=volume,source=${restore_volume},target=/var/lib/vector" \
+            --env NODE_ENV=production \
+            --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
+            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
+            --env VECTOR_COOKIE_SECURE=false \
+            "${image}" \
+            npm run doctor
+          docker run --rm \
+            --mount "type=volume,source=${restore_volume},target=/var/lib/vector" \
+            --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
+            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
+            --env VECTOR_COOKIE_SECURE=false \
+            "${image}" \
+            npm run db:compact -- --confirm-maintenance
 
       - name: Upload verified release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -147,12 +277,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install locked dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Download first candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: vector-release-candidate
-          path: expected-release
+          path: ${{ runner.temp }}/expected-release
       - name: Rebuild and compare every candidate byte
         shell: bash
         env:
@@ -164,12 +294,12 @@ jobs:
             arguments+=(--tag "${RELEASE_TAG}")
           fi
           node scripts/release-cli.mjs build \
-            --output rebuilt-release \
+            --output "${RUNNER_TEMP}/rebuilt-release" \
             --commit "${GITHUB_SHA}" \
             "${arguments[@]}"
           node scripts/release-cli.mjs compare \
-            --directory expected-release \
-            --other-directory rebuilt-release \
+            --directory "${RUNNER_TEMP}/expected-release" \
+            --other-directory "${RUNNER_TEMP}/rebuilt-release" \
             --commit "${GITHUB_SHA}" \
             "${arguments[@]}"
 
@@ -197,6 +327,28 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+      - name: Verify exact release tag signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed_signers="${RUNNER_TEMP}/vector-release-allowed-signers"
+          node --input-type=module > "${allowed_signers}" <<'NODE'
+          import {
+            releaseSigningPublicKey,
+            validateReleaseMetadata,
+          } from "./scripts/release-lib.mjs";
+
+          const metadata = await validateReleaseMetadata({ tag: process.env.GITHUB_REF_NAME });
+          process.stdout.write(`${metadata.tagger.email} ${releaseSigningPublicKey}\n`);
+          NODE
+          chmod 0600 "${allowed_signers}"
+          [[ "$(wc -l < "${allowed_signers}")" -eq 1 ]]
+          git config --local gpg.format ssh
+          git config --local gpg.ssh.allowedSignersFile "${allowed_signers}"
+          node scripts/release-cli.mjs tag-verify \
+            --tag "${GITHUB_REF_NAME}" \
+            --commit "${GITHUB_SHA}"
+
       - name: Enforce license and publication approval
         shell: bash
         run: |

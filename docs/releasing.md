@@ -1,118 +1,172 @@
 # Releasing VECTOR
 
-VECTOR releases are static, reproducible snapshots of the public browser application. A release does
-not include `node_modules`, test output, source-control metadata or any private operational data.
+VECTOR releases are reproducible source snapshots of the complete self-hosted product. Each archive
+contains the server, migrations, browser client, runtime operator commands, deployment files and
+documentation. It excludes `node_modules`, test output, source-control metadata, databases, backups,
+environment files and operational data.
 
 ## Release contract
 
 A stable release is eligible for publication only when all of these statements are true:
 
-1. `package.json`, `package-lock.json` and the changelog declare the same stable version.
-2. The repository contains the canonical MIT license and the complete test suite passes.
-3. The release tag is named `v<version>`, is annotated, has a GitHub-verified signature and resolves
-   directly to a commit rather than another tag.
-4. That commit is exactly the current default-branch head when publication begins.
-5. Two clean candidate builds are byte-for-byte identical.
-6. Every release asset matches `SHA256SUMS` and its GitHub build-provenance attestation.
-7. The GitHub Release becomes immutable. The publisher refuses to modify an existing published
-   release or an unrelated draft.
-8. The annotated tagger name, email, SSH principal and signing-key fingerprint match
-   `release-policy.json`.
+1. `package.json`, `package-lock.json` and `CHANGELOG.md` declare the same stable version.
+2. The canonical MIT license is present; unit, integration, browser and publication tests pass.
+3. The production dependency audit passes and the container builds successfully.
+4. The tag is named `v<version>`, annotated, GitHub-verified and points directly to a commit.
+5. That commit is the current default-branch head when publication begins.
+6. The annotated tagger and signing key match `release-policy.json`.
+7. Independent Ubuntu and Windows builds are byte-for-byte identical.
+8. Every asset matches `SHA256SUMS`, the release manifest and its build-provenance attestation.
+9. GitHub reports the published release as immutable.
 
-The `.tar.gz` builder writes RFC 1952 operating-system value `255` (`unknown`) into the gzip header.
-The release gate compares an Ubuntu candidate with independent Ubuntu and Windows rebuilds, so a
-host-specific gzip header or checkout transformation cannot pass as reproducible.
+The gzip builder writes RFC 1952 operating-system value `255` into the header. A host-specific gzip
+header, line-ending change or archive drift therefore fails reproducibility checks.
 
-## 2.0.1 recovery
+## Prepare the source
 
-The immutable `v2.0.0` tag remains as an unpublished historical marker. Its corporate tagger email
-was not associated with a GitHub account, so GitHub could not verify the otherwise valid signature
-and the publisher failed closed. Do not delete, move, reuse or rerun that tag. Version 2.0.1 carries
-the same browser runtime forward and adds the tagger-identity preflight; there is no runtime change.
-
-## Local candidate
-
-Use the locked dependency graph and build a candidate from a clean commit:
+Work from a clean reviewed commit and use the locked dependency graph:
 
 ```bash
-npm ci --ignore-scripts --no-audit --no-fund
+npm ci --no-audit --no-fund
 npm run check
 npx --no-install playwright install chromium
 npm run test:e2e
-node scripts/release-cli.mjs build --output release --commit "$(git rev-parse HEAD)"
-node scripts/release-cli.mjs verify --directory release --commit "$(git rev-parse HEAD)"
+docker build --check .
+docker build .
 ```
 
-Build a second candidate into another directory and compare it before relying on the first:
+Do not place an `.env`, SQLite database or backup inside the release candidate.
+
+## Build and compare candidates
 
 ```bash
-node scripts/release-cli.mjs build --output release-second --commit "$(git rev-parse HEAD)"
-node scripts/release-cli.mjs compare --directory release --other-directory release-second \
-  --commit "$(git rev-parse HEAD)"
+commit="$(git rev-parse HEAD)"
+candidate_root="$(mktemp -d)"
+node scripts/release-cli.mjs build \
+  --output "$candidate_root/release" \
+  --commit "$commit"
+node scripts/release-cli.mjs verify \
+  --directory "$candidate_root/release" \
+  --commit "$commit"
+node scripts/release-cli.mjs accept \
+  --directory "$candidate_root/release" \
+  --commit "$commit"
+node scripts/release-cli.mjs build \
+  --output "$candidate_root/release-second" \
+  --commit "$commit"
+node scripts/release-cli.mjs compare \
+  --directory "$candidate_root/release" \
+  --other-directory "$candidate_root/release-second" \
+  --commit "$commit"
 ```
 
-On Windows PowerShell, replace `$(git rev-parse HEAD)` with the output of `git rev-parse HEAD`.
+Build both candidates outside the repository. Generating artifacts inside the worktree makes it
+harder to distinguish source drift from release output and can invalidate the clean-source gate.
 
-## Rehearsal
+`accept` is stronger than archive verification. It safely extracts each distributable into a fresh
+temporary directory, installs the locked dependencies with `npm ci`, runs the tests, static checks
+and diagnostics from the extracted source, and rejects path traversal or archive-layout drift. A
+candidate that verifies but does not pass `accept` is not releasable.
 
-Run **Release readiness** manually with `expected_tag` set to the intended stable tag, for example
-`v2.0.1`. A rehearsal builds, tests, inventories and reproduces the full candidate, but the publish
-job remains skipped because the event is not a tag push.
+In PowerShell, create a unique directory below the system temporary directory and pass absolute
+paths:
 
-Download the `vector-release-candidate` workflow artifact and verify it locally:
+```powershell
+$vectorCommit = git rev-parse HEAD
+$vectorCandidateRoot = Join-Path `
+  ([System.IO.Path]::GetTempPath()) `
+  ("vector-release-" + [System.Guid]::NewGuid())
+New-Item -ItemType Directory -Path $vectorCandidateRoot | Out-Null
+$vectorCandidate = Join-Path $vectorCandidateRoot "release"
+$vectorCandidateSecond = Join-Path $vectorCandidateRoot "release-second"
+node scripts/release-cli.mjs build `
+  --output $vectorCandidate `
+  --commit $vectorCommit
+node scripts/release-cli.mjs verify `
+  --directory $vectorCandidate `
+  --commit $vectorCommit
+node scripts/release-cli.mjs accept `
+  --directory $vectorCandidate `
+  --commit $vectorCommit
+node scripts/release-cli.mjs build `
+  --output $vectorCandidateSecond `
+  --commit $vectorCommit
+node scripts/release-cli.mjs compare `
+  --directory $vectorCandidate `
+  --other-directory $vectorCandidateSecond `
+  --commit $vectorCommit
+```
+
+## Rehearse on GitHub
+
+Run the **Release readiness** workflow manually. Set `expected_tag` to the intended stable tag, such
+as `v3.0.0`. A workflow-dispatch rehearsal builds and verifies the candidate but cannot enter the
+tag-only publication job.
+
+Download the `vector-release-candidate` artifact and verify and accept it again:
 
 ```bash
 node scripts/release-cli.mjs verify --directory release --commit <workflow-commit>
+node scripts/release-cli.mjs accept --directory release --commit <workflow-commit>
 sha256sum --check release/SHA256SUMS
 ```
 
-## Publication
+## Create the tag
 
-After the rehearsal passes, create a signed annotated tag locally at the exact reviewed default-branch
-commit. Never rewrite or reuse an existing tag. Run the tracked identity preflight with the same
-name and email that will be embedded in the annotated tag:
+Read the approved identity from the tracked policy instead of copying a person's name into scripts
+or documentation:
 
 ```bash
+tagger_name="$(node -p "JSON.parse(require('fs').readFileSync('release-policy.json')).tagger.name")"
+tagger_email="$(node -p "JSON.parse(require('fs').readFileSync('release-policy.json')).tagger.email")"
+commit="$(git rev-parse HEAD)"
+
 node scripts/release-cli.mjs tag-preflight \
-  --tag v2.0.1 \
-  --commit <reviewed-commit> \
-  --tagger-name "Djenis Ejupi" \
-  --tagger-email "69587167+ejupi-djenis30@users.noreply.github.com"
-git -c user.name='Djenis Ejupi' \
-  -c user.email='69587167+ejupi-djenis30@users.noreply.github.com' \
-  tag -s v2.0.1 <reviewed-commit> -m "VECTOR 2.0.1"
-node scripts/release-cli.mjs tag-verify \
-  --tag v2.0.1 \
-  --commit <reviewed-commit>
-git push origin refs/tags/v2.0.1:refs/tags/v2.0.1
+  --tag v3.0.0 \
+  --commit "$commit" \
+  --tagger-name "$tagger_name" \
+  --tagger-email "$tagger_email"
+
+git -c user.name="$tagger_name" \
+  -c user.email="$tagger_email" \
+  tag -s v3.0.0 "$commit" -m "VECTOR 3.0.0"
+
+node scripts/release-cli.mjs tag-verify --tag v3.0.0 --commit "$commit"
+git push origin refs/tags/v3.0.0:refs/tags/v3.0.0
 ```
 
-The preflight rejects `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`; those variables override
-Git configuration during annotated-tag creation. The post-creation verifier reads the exact local
-`refs/tags/v2.0.1` object, requires a direct commit target and checks the real tagger plus the
-cryptographic SSH principal and key fingerprint. Never push when either gate fails.
+The preflight rejects `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` because they override Git's
+tagger configuration. The post-creation verifier reads the exact local tag object, requires a direct
+commit target and checks the real tagger and signing-key fingerprint. Do not push if either gate
+fails, and never move or reuse a tag.
 
-The tag workflow repeats the complete candidate build. Publication is the final job and runs only for
-the tag event. It verifies the remote tag object and signature through the GitHub API, checks that the
-tag still equals the default-branch head, attests the checksummed assets, uploads an exact draft and
-publishes it. The workflow then requires GitHub to report the release as immutable.
-If a verified draft already contains part of the candidate, the publisher keeps only byte-exact
-assets and uploads the missing files. It never deletes draft assets during recovery.
+The tag workflow repeats every test and reproducibility check. It builds the candidate, accepts the
+extracted archives, then builds the exact Docker image with the source revision label. The smoke
+gate runs that image with a read-only root filesystem, dropped capabilities and a private data
+volume; checks readiness and `doctor`; verifies clean `SIGTERM` shutdown; and exercises backup,
+post-transfer inspection, restore, diagnostics and maintenance compaction on a second volume.
+Ubuntu and Windows independently rebuild into runner-temporary directories and compare every
+candidate byte.
 
-If source or workflow changes are needed after a tag is published, prepare the next patch version.
-Do not move or delete the existing release.
+Only after those jobs pass does the final job verify the remote annotated tag through the GitHub
+API, attest the assets, create an exact draft and publish after GitHub marks the release immutable.
+An exact partial draft may be resumed; foreign or mismatched assets cause a closed failure.
 
-## Consumer verification
+## Verify and run a downloaded release
 
-Download an archive, `SHA256SUMS` and the release manifest from the GitHub Release. Then verify both
-the checksum and GitHub provenance:
+Verify checksums and provenance before extraction:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify vector-site-2.0.1.tar.gz \
+gh attestation verify vector-self-hosted-3.0.0.tar.gz \
   --repo ejupi-djenis30/vector-placement-operations \
   --signer-workflow ejupi-djenis30/vector-placement-operations/.github/workflows/release.yml
 ```
 
-Extract either archive and serve its top-level `vector-placement-operations-<version>` directory with
-any static HTTP server. VECTOR has no production runtime dependencies and makes no network requests.
+The archive expands into `vector-placement-operations-<version>`. Review
+`docs/self-hosting.md`, create a new `.env` from `.env.example`, use a unique bootstrap password and
+build the included Dockerfile. The CycloneDX file lists the locked production dependencies included
+in that release contract.
+
+If source or workflow changes are needed after publication, prepare the next version. Do not delete
+or replace an existing release.
