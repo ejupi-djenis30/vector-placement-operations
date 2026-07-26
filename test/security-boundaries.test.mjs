@@ -80,6 +80,8 @@ test("branding enforces contrast and PNG structure, dimensions and CRC integrity
 
   const png = readFileSync(new URL("../site/assets/social-preview.png", import.meta.url));
   assert.deepEqual(assertPng(png), { width: 1200, height: 630 });
+  assert.throws(() => assertPng("not-a-buffer"), /must be a PNG file/);
+  assert.throws(() => assertPng(new Uint8Array(png)), /must be a PNG file/);
   const corrupted = Buffer.from(png);
   corrupted[corrupted.length - 1] ^= 0xff;
   assert.throws(() => assertPng(corrupted), /integrity check/);

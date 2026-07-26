@@ -3,9 +3,9 @@ import { conflict } from "./errors.mjs";
 import { requirePermission } from "./rbac.mjs";
 import {
   assertBrandPalette,
-  assertPng,
   cleanText,
   readableTextColor,
+  validatePng,
 } from "./validation.mjs";
 import { assertIanaTimeZone, dateAtInstantInTimeZone } from "./school-time.mjs";
 
@@ -150,14 +150,14 @@ export function readLogo(db) {
 
 export function updateLogo(db, user, body, expectedRevision, requestId) {
   requirePermission(user, "manage_branding");
-  const dimensions = assertPng(body);
+  const { bytes, width, height } = validatePng(body);
   const now = new Date().toISOString();
   return db.transaction(() => {
     const result = db.prepare(`
       UPDATE schools
       SET logo_mime = 'image/png', logo_blob = ?, revision = revision + 1, updated_at = ?
       WHERE id = ? AND revision = ?
-    `).run(body, now, user.schoolId, expectedRevision);
+    `).run(bytes, now, user.schoolId, expectedRevision);
     if (result.changes !== 1) {
       throw conflict("Branding changed while the logo was being saved.");
     }
@@ -167,10 +167,10 @@ export function updateLogo(db, user, body, expectedRevision, requestId) {
       action: "branding.logo_updated",
       entityType: "school",
       entityId: user.schoolId,
-      metadata: { changedFields: ["logo"], count: body.length },
+      metadata: { changedFields: ["logo"], count: bytes.length },
       requestId,
     });
-    return { ...dimensions, revision: expectedRevision + 1 };
+    return { width, height, revision: expectedRevision + 1 };
   }).immediate();
 }
 

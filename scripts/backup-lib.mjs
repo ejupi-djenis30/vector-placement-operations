@@ -2,7 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   linkSync,
   mkdirSync,
@@ -241,16 +243,42 @@ export function verifyDatabaseAgainstManifest(file, manifest) {
 
 export function readAndVerifyManifest(file) {
   const sidecar = manifestPath(file);
-  if (!existsSync(file) || !existsSync(sidecar)) {
+  if (!existsSync(file)) {
     throw new Error("The backup and its manifest must both exist.");
   }
-  const manifestStats = statSync(sidecar);
-  if (manifestStats.size <= 0 || manifestStats.size > MAX_MANIFEST_BYTES) {
-    throw new Error("Backup manifest size is outside the supported range.");
+  let descriptor;
+  try {
+    descriptor = openSync(
+      sidecar,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error("The backup and its manifest must both exist.");
+    }
+    throw new Error("Backup manifest could not be opened safely.");
+  }
+  let manifestText;
+  try {
+    const manifestStats = fstatSync(descriptor);
+    if (
+      !manifestStats.isFile()
+      || manifestStats.size <= 0
+      || manifestStats.size > MAX_MANIFEST_BYTES
+    ) {
+      throw new Error("Backup manifest size is outside the supported range.");
+    }
+    try {
+      manifestText = readFileSync(descriptor, "utf8");
+    } catch {
+      throw new Error("Backup manifest could not be read.");
+    }
+  } finally {
+    closeSync(descriptor);
   }
   let manifest;
   try {
-    manifest = JSON.parse(readFileSync(sidecar, "utf8"));
+    manifest = JSON.parse(manifestText);
   } catch {
     throw new Error("Backup manifest is not valid JSON.");
   }

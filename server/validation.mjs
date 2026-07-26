@@ -128,8 +128,12 @@ function pngCrc32(bytes) {
   return (value ^ 0xffffffff) >>> 0;
 }
 
-export function assertPng(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 57 || buffer.length > 262_144) {
+export function validatePng(input) {
+  if (!Buffer.isBuffer(input)) {
+    throw new AppError(422, "invalid_logo", "The logo must be a PNG file no larger than 256 KB.");
+  }
+  const buffer = Buffer.from(input);
+  if (buffer.length < 57 || buffer.length > 262_144) {
     throw new AppError(422, "invalid_logo", "The logo must be a PNG file no larger than 256 KB.");
   }
   if (!buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
@@ -202,6 +206,11 @@ export function assertPng(buffer) {
       "Logo dimensions must be between 16 and 2048 pixels.",
     );
   }
+  return { bytes: buffer, width, height };
+}
+
+export function assertPng(input) {
+  const { width, height } = validatePng(input);
   return { width, height };
 }
 

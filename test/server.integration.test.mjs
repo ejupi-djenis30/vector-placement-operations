@@ -38,6 +38,12 @@ async function replaceTemporaryPassword(client, email, currentPassword, newPassw
 
 test("login rejects a cross-origin request and accepts the configured origin", async () => {
   const instance = await app();
+  const health = await instance.client.request("/api/health/live");
+  assert.equal(health.response.status, 200);
+  assert.ok(health.response.headers.get("ratelimit-policy"));
+  const workspace = await fetch(`${instance.baseUrl}/app/`, { redirect: "manual" });
+  assert.equal(workspace.status, 200);
+  assert.ok(workspace.headers.get("ratelimit-policy"));
   const crossOrigin = await instance.client.request("/api/auth/login", {
     method: "POST",
     body: {
@@ -130,6 +136,14 @@ test("logo mutations require a strong branding revision and admit one concurrent
   });
   assert.equal(malformedPrecondition.response.status, 400);
   assert.equal(malformedPrecondition.payload.error.code, "invalid_precondition");
+
+  const wrongMediaType = await client.request("/api/branding/logo", {
+    method: "PUT",
+    headers: { "if-match": `"${revision}"` },
+    body: { disguisedAs: "a PNG" },
+  });
+  assert.equal(wrongMediaType.response.status, 422);
+  assert.equal(wrongMediaType.payload.error.code, "invalid_logo");
 
   const contenders = await Promise.all([
     client.request("/api/branding/logo", {

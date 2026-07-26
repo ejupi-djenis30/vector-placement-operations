@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import cookieParser from "cookie-parser";
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
 import { readSession, requireAuthenticated, verifyCsrf, verifyRequestOrigin } from "./auth.mjs";
 import { loadConfig } from "./config.mjs";
@@ -65,6 +66,19 @@ export async function buildApp(options = {}) {
     response.set("X-Request-ID", request.id);
     next();
   });
+  app.use(rateLimit({
+    windowMs: 60_000,
+    limit: config.production ? 600 : 10_000,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    handler: (request, response) => {
+      response.status(429).json(errorPayload(
+        request,
+        "rate_limited",
+        "Too many requests. Try again shortly.",
+      ));
+    },
+  }));
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {

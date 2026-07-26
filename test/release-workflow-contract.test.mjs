@@ -23,6 +23,7 @@ test("release workflow keeps rehearsal, reproducibility, attestation and immutab
     "npm run doctor",
     "docker stop --time 15",
     "npm run db:backup",
+    "docker cp --archive",
     "npm run db:inspect-backup",
     "npm run db:restore",
     "npm run db:compact",
@@ -60,6 +61,7 @@ test("release workflow keeps rehearsal, reproducibility, attestation and immutab
   assert.ok(attest > keyGate, "The exact-key gate must run before release attestation.");
   assert.equal((workflow.match(/scripts\/release-cli\.mjs tag-verify/g) ?? []).length, 1);
   assert.equal((workflow.match(/gpg\.ssh\.allowedSignersFile/g) ?? []).length, 1);
+  assert.equal((workflow.match(/docker cp --archive/g) ?? []).length, 2);
   assert.equal(workflow.includes("npm ci --ignore-scripts"), false);
   assert.equal((workflow.match(/contents: write/g) ?? []).length, 1);
   assert.equal((workflow.match(/pull_request_target\s*:/g) ?? []).length, 0);

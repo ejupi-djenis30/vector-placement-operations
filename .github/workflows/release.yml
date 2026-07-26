@@ -189,8 +189,8 @@ jobs:
             "${image}" \
             npm run db:backup -- --output /var/lib/vector/release-smoke.sqlite
           mkdir -p "${transfer}"
-          docker cp "${container}:/var/lib/vector/release-smoke.sqlite" "${transfer}/release-smoke.sqlite"
-          docker cp "${container}:/var/lib/vector/release-smoke.sqlite.manifest.json" "${transfer}/release-smoke.sqlite.manifest.json"
+          docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite" "${transfer}/release-smoke.sqlite"
+          docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite.manifest.json" "${transfer}/release-smoke.sqlite.manifest.json"
           docker run --rm --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,size=32m \
             --cap-drop ALL \
