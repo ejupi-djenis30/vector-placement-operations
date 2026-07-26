@@ -8,6 +8,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -144,6 +145,22 @@ test("backup, manifest inspection and restore form a verified session-free round
 
   const inspected = cli("scripts/inspect-backup.mjs", ["--file", backup], environment);
   assert.equal(inspected.status, 0, inspected.stderr);
+
+  if (process.platform !== "win32") {
+    const symlinked = path.join(root, "symlinked-manifest.sqlite");
+    copyFileSync(backup, symlinked);
+    symlinkSync(
+      `${backup}.manifest.json`,
+      `${symlinked}.manifest.json`,
+    );
+    const symlinkFailure = cli(
+      "scripts/inspect-backup.mjs",
+      ["--file", symlinked],
+      environment,
+    );
+    assert.notEqual(symlinkFailure.status, 0);
+    assert.match(symlinkFailure.stderr, /opened safely \(ELOOP\)/i);
+  }
 
   for (const suffix of ["-wal", "-shm", "-journal"]) {
     writeFileSync(`${restored}${suffix}`, "");

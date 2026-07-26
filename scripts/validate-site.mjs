@@ -1,4 +1,5 @@
 import { readFile, readdir, stat } from "node:fs/promises";
+import { assertExternalScriptsOnly } from "./site-validation.mjs";
 
 const PAGE_URL = "https://ejupi-djenis30.github.io/vector-placement-operations/";
 const SOCIAL_IMAGE_URL = `${PAGE_URL}assets/social-preview.png`;
@@ -47,48 +48,6 @@ async function assertLocalReferences(html, pageUrl) {
     } else {
       assert(metadata.isFile(), `Local reference is not a file: ${reference}`);
     }
-  }
-}
-
-function assertExternalScriptsOnly(html, name) {
-  assert(!/\son[a-z]+\s*=/i.test(html), `${name} contains an inline event handler.`);
-  assert(!/\sstyle\s*=/i.test(html), `${name} contains an inline style.`);
-
-  const lowerHtml = html.toLowerCase();
-  let cursor = 0;
-  while (cursor < html.length) {
-    const openStart = lowerHtml.indexOf("<script", cursor);
-    if (openStart === -1) break;
-    const openDelimiter = lowerHtml[openStart + 7];
-    assert(
-      openDelimiter === ">" || /\s/.test(openDelimiter ?? ""),
-      `${name} contains a malformed script element.`,
-    );
-    const openEnd = lowerHtml.indexOf(">", openStart + 7);
-    assert(openEnd !== -1, `${name} contains an unterminated script element.`);
-
-    const closeStart = lowerHtml.indexOf("</script", openEnd + 1);
-    assert(closeStart !== -1, `${name} contains an unclosed script element.`);
-    const closeDelimiter = lowerHtml[closeStart + 8];
-    assert(
-      closeDelimiter === ">" || /\s/.test(closeDelimiter ?? ""),
-      `${name} contains a malformed script closing tag.`,
-    );
-    const closeEnd = lowerHtml.indexOf(">", closeStart + 8);
-    assert(closeEnd !== -1, `${name} contains an unterminated script closing tag.`);
-    assert(
-      lowerHtml.slice(closeStart + 8, closeEnd).trim() === "",
-      `${name} contains a malformed script closing tag.`,
-    );
-
-    const attributes = html.slice(openStart + 7, openEnd);
-    const scriptText = html.slice(openEnd + 1, closeStart);
-    assert(
-      /(?:^|\s)src\s*=\s*"[^"]+"/i.test(attributes),
-      `${name} contains an inline script.`,
-    );
-    assert(scriptText.trim() === "", `${name} contains script text.`);
-    cursor = closeEnd + 1;
   }
 }
 

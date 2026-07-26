@@ -151,6 +151,22 @@ function query(schema, request) {
   return parseInput(schema, request.query ?? {});
 }
 
+function pngBody(request) {
+  if (!request.is("image/png")) {
+    throw new AppError(415, "unsupported_media_type", "Logos require an image/png request body.");
+  }
+  const input = request.body;
+  if (
+    typeof input !== "object"
+    || input === null
+    || Array.isArray(input)
+    || !Buffer.isBuffer(input)
+  ) {
+    throw new AppError(422, "invalid_logo", "The logo must be a valid PNG file.");
+  }
+  return Buffer.from(input);
+}
+
 function json(response, schema, value, status = 200) {
   return response.status(status).json(serialize(schema, value));
 }
@@ -703,7 +719,7 @@ export function registerApiRoutes(app, services = {}) {
     const result = updateLogo(
       db,
       request.user,
-      request.body,
+      pngBody(request),
       expectedRevision(request),
       request.id,
     );

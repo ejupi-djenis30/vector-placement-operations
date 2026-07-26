@@ -66,19 +66,6 @@ export async function buildApp(options = {}) {
     response.set("X-Request-ID", request.id);
     next();
   });
-  app.use(rateLimit({
-    windowMs: 60_000,
-    limit: config.production ? 600 : 10_000,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    handler: (request, response) => {
-      response.status(429).json(errorPayload(
-        request,
-        "rate_limited",
-        "Too many requests. Try again shortly.",
-      ));
-    },
-  }));
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
@@ -95,6 +82,19 @@ export async function buildApp(options = {}) {
       },
     },
     crossOriginEmbedderPolicy: false,
+  }));
+  app.use(rateLimit({
+    windowMs: 60_000,
+    limit: config.production ? 600 : 10_000,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    handler: (request, response) => {
+      response.status(429).json(errorPayload(
+        request,
+        "rate_limited",
+        "Too many requests. Try again shortly.",
+      ));
+    },
   }));
   app.use(cookieParser());
   app.use("/api", (_request, response, next) => {

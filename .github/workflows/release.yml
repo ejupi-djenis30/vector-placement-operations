@@ -191,6 +191,21 @@ jobs:
           mkdir -p "${transfer}"
           docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite" "${transfer}/release-smoke.sqlite"
           docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite.manifest.json" "${transfer}/release-smoke.sqlite.manifest.json"
+          [[ -f "${transfer}/release-smoke.sqlite" && ! -L "${transfer}/release-smoke.sqlite" ]]
+          [[ -f "${transfer}/release-smoke.sqlite.manifest.json" && ! -L "${transfer}/release-smoke.sqlite.manifest.json" ]]
+          # docker cp ownership varies across daemon and user-namespace modes. Normalize only the
+          # two synthetic transfer files for the non-root image user with a one-capability helper.
+          docker run --rm --read-only \
+            --network none \
+            --user root \
+            --cap-drop ALL \
+            --cap-add CHOWN \
+            --security-opt no-new-privileges:true \
+            --mount "type=bind,source=${transfer},target=/transfer" \
+            "${image}" \
+            chown node:node \
+              /transfer/release-smoke.sqlite \
+              /transfer/release-smoke.sqlite.manifest.json
           docker run --rm --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,size=32m \
             --cap-drop ALL \

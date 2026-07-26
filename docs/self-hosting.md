@@ -133,8 +133,8 @@ combined-access format may still record the full request URI.
 VECTOR applies an application-wide limit of 600 requests per minute for each resolved client
 address, plus a stricter limit for unsuccessful sign-in attempts. Keep `VECTOR_TRUST_PROXY`
 bounded to the exact number of controlled proxy hops so clients cannot choose the address used by
-these limits. A reverse proxy may add a separate edge limit, but it should not replace the
-application controls.
+these limits. The standard single-process deployment keeps its counter in memory. A reverse proxy
+may add a separate edge limit, but it should not replace the application controls.
 
 ## Environment reference
 

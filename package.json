@@ -39,7 +39,8 @@
     "check": "npm test && npm run check:site && npm run check:release && npm run check:audit"
   },
   "devDependencies": {
-    "@playwright/test": "1.61.1"
+    "@playwright/test": "1.61.1",
+    "parse5": "8.0.1"
   },
   "engines": {
     "node": ">=22"

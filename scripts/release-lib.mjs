@@ -427,6 +427,7 @@ const releaseFileInputs = Object.freeze([
   "scripts/restore.mjs",
   "scripts/serve-e2e.mjs",
   "scripts/serve-site.mjs",
+  "scripts/site-validation.mjs",
   "scripts/validate-site.mjs",
   "server/app.mjs",
   "server/audit.mjs",
@@ -468,6 +469,7 @@ const releaseFileInputs = Object.freeze([
   "test/release-publisher.test.mjs",
   "test/release-workflow-contract.test.mjs",
   "test/school-time.test.mjs",
+  "test/site-validation.test.mjs",
   "test/security-boundaries.test.mjs",
   "test/server.integration.test.mjs",
 ]);

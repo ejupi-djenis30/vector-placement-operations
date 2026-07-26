@@ -256,23 +256,37 @@ export function readAndVerifyManifest(file) {
     if (error?.code === "ENOENT") {
       throw new Error("The backup and its manifest must both exist.");
     }
-    throw new Error("Backup manifest could not be opened safely.");
+    const code = typeof error?.code === "string" ? error.code : "unknown_error";
+    throw new Error(`Backup manifest could not be opened safely (${code}).`);
   }
   let manifestText;
   try {
-    const manifestStats = fstatSync(descriptor);
+    const beforeRead = fstatSync(descriptor);
     if (
-      !manifestStats.isFile()
-      || manifestStats.size <= 0
-      || manifestStats.size > MAX_MANIFEST_BYTES
+      !beforeRead.isFile()
+      || beforeRead.size <= 0
+      || beforeRead.size > MAX_MANIFEST_BYTES
     ) {
       throw new Error("Backup manifest size is outside the supported range.");
     }
+    let manifestBytes;
     try {
-      manifestText = readFileSync(descriptor, "utf8");
+      manifestBytes = readFileSync(descriptor);
     } catch {
       throw new Error("Backup manifest could not be read.");
     }
+    const afterRead = fstatSync(descriptor);
+    if (
+      beforeRead.dev !== afterRead.dev
+      || beforeRead.ino !== afterRead.ino
+      || beforeRead.size !== afterRead.size
+      || beforeRead.mtimeMs !== afterRead.mtimeMs
+      || beforeRead.ctimeMs !== afterRead.ctimeMs
+      || manifestBytes.length !== beforeRead.size
+    ) {
+      throw new Error("Backup manifest changed while it was being read.");
+    }
+    manifestText = manifestBytes.toString("utf8");
   } finally {
     closeSync(descriptor);
   }

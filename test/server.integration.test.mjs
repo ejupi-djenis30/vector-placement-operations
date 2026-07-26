@@ -142,8 +142,8 @@ test("logo mutations require a strong branding revision and admit one concurrent
     headers: { "if-match": `"${revision}"` },
     body: { disguisedAs: "a PNG" },
   });
-  assert.equal(wrongMediaType.response.status, 422);
-  assert.equal(wrongMediaType.payload.error.code, "invalid_logo");
+  assert.equal(wrongMediaType.response.status, 415);
+  assert.equal(wrongMediaType.payload.error.code, "unsupported_media_type");
 
   const contenders = await Promise.all([
     client.request("/api/branding/logo", {

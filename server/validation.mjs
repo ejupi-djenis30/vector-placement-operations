@@ -129,7 +129,12 @@ function pngCrc32(bytes) {
 }
 
 export function validatePng(input) {
-  if (!Buffer.isBuffer(input)) {
+  if (
+    typeof input !== "object"
+    || input === null
+    || Array.isArray(input)
+    || !Buffer.isBuffer(input)
+  ) {
     throw new AppError(422, "invalid_logo", "The logo must be a PNG file no larger than 256 KB.");
   }
   const buffer = Buffer.from(input);
