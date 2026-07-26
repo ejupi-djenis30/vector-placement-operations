@@ -3,173 +3,115 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Plan and monitor student placements in one browser-based workspace, using fictional data and local-only updates." />
+    <meta name="description" content="VECTOR is a self-hosted placement operations workspace for schools." />
     <meta name="theme-color" content="#17324d" />
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'self'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <link rel="canonical" href="https://ejupi-djenis30.github.io/vector-placement-operations/" />
-    <meta property="og:title" content="VECTOR — Every placement, one clear picture" />
-    <meta property="og:description" content="Search a fictional cohort, review progress and move placement milestones forward in the browser." />
+    <meta property="og:title" content="VECTOR — Self-hosted placement operations for schools" />
+    <meta property="og:description" content="Assign placements, verify activity and close each record with evidence on infrastructure your school controls." />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="VECTOR" />
     <meta property="og:locale" content="en_US" />
     <meta property="og:url" content="https://ejupi-djenis30.github.io/vector-placement-operations/" />
     <meta property="og:image" content="https://ejupi-djenis30.github.io/vector-placement-operations/assets/social-preview.png" />
-    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="VECTOR placement operations workspace" />
+    <meta property="og:image:alt" content="VECTOR placement workflow with three completed readiness checks." />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="VECTOR — Every placement, one clear picture" />
-    <meta name="twitter:description" content="A hands-on placement operations workspace built with fictional data." />
+    <meta name="twitter:title" content="VECTOR — Self-hosted placement operations for schools" />
+    <meta name="twitter:description" content="Assign placements, verify activity and close each record with evidence on infrastructure your school controls." />
     <meta name="twitter:image" content="https://ejupi-djenis30.github.io/vector-placement-operations/assets/social-preview.png" />
-    <meta name="twitter:image:alt" content="VECTOR placement operations workspace" />
     <link rel="icon" href="assets/vector-mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="api/public/branding.css" />
     <title>VECTOR — Placement Operations</title>
   </head>
-  <body>
-    <a class="skip-link" href="#top">Skip to content</a>
-    <header class="header">
-      <a class="brand" href="#top" aria-label="VECTOR home">
-        <img src="assets/vector-mark.svg" width="42" height="42" alt="" />
+  <body class="marketing-page">
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="VECTOR home">
+        <img src="assets/vector-mark.svg" width="38" height="38" alt="" />
         <span>VECTOR</span>
       </a>
       <nav aria-label="Primary navigation">
-        <a href="#workspace">Workspace</a>
-        <a href="#principles">Principles</a>
-        <a href="#provenance">Provenance</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#controls">Controls</a>
+        <a href="#self-host">Self-host</a>
       </nav>
-      <span class="source">Live demo</span>
+      <a class="header-action" href="app/" data-workspace-link>Open workspace <span aria-hidden="true">↗</span></a>
     </header>
 
-    <main id="top" tabindex="-1">
-      <section class="hero">
+    <main id="content" tabindex="-1">
+      <section class="marketing-hero section-wrap">
         <div class="hero-copy">
-          <p class="eyebrow"><span>01</span> Placement operations, without the spreadsheet fog</p>
-          <h1>Every placement.<br /><em>One clear picture.</em></h1>
-          <p class="lead">
-            VECTOR puts students, hosts, supervisors and progress in one calm workspace. This demo
-            uses fictional records and stores changes only on your device.
-          </p>
+          <p class="eyebrow"><span>01</span> Self-hosted placement operations</p>
+          <h1>Keep each placement<br /><em>accountable.</em></h1>
+          <p class="lead">Assign students and hosts, verify hours and check-ins, and close every placement with the evidence your process requires.</p>
           <div class="hero-actions">
-            <a class="primary-button" href="#workspace">Open the workspace</a>
-            <button type="button" data-reset>Reset demo data</button>
+            <a class="button button-primary" href="app/" data-workspace-link>Open workspace <span aria-hidden="true">↗</span></a>
+            <a class="button button-quiet" href="#self-host">Read the setup path</a>
           </div>
-          <ul class="boundaries" aria-label="Demo boundaries">
-            <li>Synthetic data</li>
-            <li>No server</li>
-            <li>Local changes only</li>
-          </ul>
+          <p class="availability" data-api-status aria-live="polite">Checking this installation…</p>
         </div>
-        <div class="hero-board" aria-hidden="true">
-          <div class="board-grid"></div>
-          <div class="board-frame">
-            <div class="board-header">
-              <span>PLACEMENT / PL-101</span>
-              <span><i></i> IN PROGRESS</span>
-            </div>
-            <div class="placement-flow">
-              <div class="flow-line"></div>
-              <article class="flow-step">
-                <span class="step-index">01</span>
-                <small>STUDENT</small>
-                <strong>LEA D.</strong>
-                <b>MATCHED</b>
-              </article>
-              <article class="flow-step">
-                <span class="step-index">02</span>
-                <small>HOST</small>
-                <strong>ATLAS</strong>
-                <b>ACTIVE</b>
-              </article>
-              <article class="flow-step">
-                <span class="step-index">03</span>
-                <small>MENTOR</small>
-                <strong>MINA P.</strong>
-                <b>CHECK-IN</b>
-              </article>
-            </div>
-            <div class="progress-panel">
-              <div class="progress-heading"><span>PLACEMENT PROGRESS</span><strong>40%</strong></div>
-              <div class="progress-rail"><span></span></div>
-              <div class="progress-scale"><span>0 H</span><b>72 H LOGGED</b><span>180 H</span></div>
-            </div>
-            <p class="board-foot">LOCAL WORKSPACE / SYNTHETIC COHORT</p>
+        <div class="signal-board" aria-label="Illustration of the VECTOR placement flow">
+          <div class="signal-grid" aria-hidden="true"></div>
+          <div class="signal-topline"><span>PLACEMENT / ACTIVE</span><b><i></i> VERIFIED SIGNALS</b></div>
+          <ol class="signal-path">
+            <li><span>01</span><small>ASSIGN</small><strong>Student + host</strong></li>
+            <li><span>02</span><small>TRACK</small><strong>Hours + check-ins</strong></li>
+            <li><span>03</span><small>CLOSE</small><strong>Evidence reviewed</strong></li>
+          </ol>
+          <div class="signal-meter">
+            <div><span>PLACEMENT READINESS</span><b>3 / 3</b></div>
+            <p><i></i><i></i><i></i></p>
+            <small>HOURS · CHECK-IN · DOCUMENTS</small>
           </div>
+          <p class="signal-caption">LOCAL INSTALLATION / SCHOOL-CONTROLLED DATA</p>
         </div>
       </section>
 
-      <section class="workspace section" id="workspace" aria-labelledby="workspace-title">
-        <div class="section-heading">
-          <p class="eyebrow"><span>02</span> Working demonstration</p>
-          <h2 id="workspace-title">Move work forward.<br />Know what changed.</h2>
-          <p>Filter the fictional cohort, inspect progress and advance a milestone. Refresh the page: your local changes remain until you reset them.</p>
-        </div>
-
-        <div class="console">
-          <aside class="console-sidebar">
-            <div class="console-brand"><img src="assets/vector-mark.svg" width="34" height="34" alt="" /><b>VECTOR</b></div>
-            <nav aria-label="Workspace sections">
-              <button type="button" aria-current="page"><span aria-hidden="true">◫</span>Placements</button>
-              <button type="button" disabled><span aria-hidden="true">◎</span>People</button>
-              <button type="button" disabled><span aria-hidden="true">◇</span>Hosts</button>
-              <button type="button" disabled><span aria-hidden="true">≋</span>Reports</button>
-            </nav>
-            <div class="privacy-card"><span>PRIVATE BY DESIGN</span><p>Fictional records. Local storage. Zero network writes.</p></div>
-          </aside>
-          <div class="console-main">
-            <div class="console-topbar">
-              <div><p>PLACEMENT OPERATIONS</p><h3>Current cohort</h3></div>
-              <span class="demo-chip">Synthetic dataset</span>
-            </div>
-            <div class="metrics" aria-label="Cohort summary">
-              <article><span>Placements</span><strong data-metric="placements">—</strong><small>across 6 fictional hosts</small></article>
-              <article><span>In progress</span><strong data-metric="active">—</strong><small>currently active</small></article>
-              <article><span>Needs review</span><strong data-metric="review">—</strong><small>waiting for sign-off</small></article>
-              <article class="metric-accent"><span>Hours logged</span><strong><span data-metric="completion">—</span>%</strong><small>of cohort target</small></article>
-            </div>
-            <div class="toolbar">
-              <label><span class="sr-only">Search placements</span><input type="search" placeholder="Search student, host or supervisor" data-search /></label>
-              <div class="status-tabs" aria-label="Filter by status" data-status-tabs>
-                <button type="button" data-status="all" aria-pressed="true">All</button>
-                <button type="button" data-status="active" aria-pressed="false">In progress</button>
-                <button type="button" data-status="review" aria-pressed="false">Needs review</button>
-                <button type="button" data-status="complete" aria-pressed="false">Complete</button>
-              </div>
-            </div>
-            <div class="placement-list" data-placement-list aria-live="polite"></div>
-            <p class="empty-state" data-empty hidden>No placements match this view.</p>
-          </div>
+      <section class="statement section-wrap" id="workflow" aria-labelledby="workflow-title">
+        <div class="section-label"><span>02</span> The operating view</div>
+        <h2 id="workflow-title">One workflow.<br />Each decision traceable.</h2>
+        <div class="workflow-grid">
+          <article><span>01</span><h3>Set the placement up.</h3><p>Record who is involved, where the work happens, its dates and the expected hours.</p></article>
+          <article><span>02</span><h3>Follow the work.</h3><p>Verify time, record check-ins and keep required evidence beside the placement it belongs to.</p></article>
+          <article><span>03</span><h3>Close the record.</h3><p>VECTOR blocks completion until the required hours, follow-up and documents are in place.</p></article>
         </div>
       </section>
 
-      <section class="principles section" id="principles" aria-labelledby="principles-title">
-        <div class="section-heading compact">
-          <p class="eyebrow"><span>03</span> Product principles</p>
-          <h2 id="principles-title">Sensitive work needs<br />boring guarantees.</h2>
+      <section class="control-section section-wrap" id="controls" aria-labelledby="controls-title">
+        <div class="control-copy">
+          <p class="eyebrow"><span>03</span> Built for real operating conditions</p>
+          <h2 id="controls-title">Straightforward to operate.<br /><em>Explicit where it matters.</em></h2>
         </div>
-        <div class="principle-grid">
-          <article><span>01</span><h3>Use less data.</h3><p>Collect only what the placement process requires. Contact data does not belong in a public demonstration.</p></article>
-          <article><span>02</span><h3>Show the state.</h3><p>Progress, next actions and ownership stay visible. A status should never be a mystery buried in a document.</p></article>
-          <article><span>03</span><h3>Keep an exit.</h3><p>Every local change can be reset. Production systems should add export, retention and deletion controls from day one.</p></article>
-        </div>
+        <dl class="control-list">
+          <div><dt>Role-aware access</dt><dd>Administrators, coordinators, tutors and viewers see only the work their role permits.</dd></div>
+          <div><dt>Auditable changes</dt><dd>Sensitive actions leave a trace without copying personal fields into audit metadata.</dd></div>
+          <div><dt>Portable records</dt><dd>Use bounded CSV import and export when records need to enter or leave the installation.</dd></div>
+          <div><dt>School-led identity</dt><dd>Set the product name, colours, contact details and logo at runtime for your own installation.</dd></div>
+        </dl>
       </section>
 
-      <section class="provenance section" id="provenance" aria-labelledby="provenance-title">
-        <div><p class="eyebrow"><span>04</span> Team provenance</p><h2 id="provenance-title">Rebuilt for the public. True to its team roots.</h2></div>
-        <div class="provenance-copy">
-          <p>VECTOR began as a 2023 academic team project. This edition keeps the product idea and rebuilds the application with synthetic fixtures and a browser-only data model.</p>
-          <p>The contributors approved publication of this reconstruction. The code is available under the MIT License.</p>
+      <section class="self-host section-wrap" id="self-host" aria-labelledby="self-host-title">
+        <div>
+          <p class="eyebrow"><span>04</span> Own the runtime</p>
+          <h2 id="self-host-title">A public product page.<br />A private workspace.</h2>
+        </div>
+        <div class="self-host-copy">
+          <p>VECTOR is designed to be run by the institution that uses it. The browser workspace talks to your own Node and SQLite installation; GitHub Pages only publishes this product presentation.</p>
+          <p>Before production use, your institution remains responsible for its legal basis, retention schedule, minimisation, DPIA and transport security.</p>
+          <div class="code-strip" aria-label="Self-hosting commands"><code>cp .env.example .env</code><code>docker compose up -d</code><code>open /app/</code></div>
+          <a class="text-link" href="https://github.com/ejupi-djenis30/vector-placement-operations#readme">Read the self-hosting guide <span aria-hidden="true">↗</span></a>
         </div>
       </section>
     </main>
 
-    <footer>
+    <footer class="site-footer section-wrap">
       <img src="assets/vector-lockup.svg" alt="VECTOR — Placement Operations" width="210" height="48" />
-      <p>Fictional records. Nothing leaves your browser.</p>
-      <a href="https://github.com/ejupi-djenis30/vector-placement-operations">Project repository ↗</a>
+      <p>Self-hosted placement operations for schools.</p>
+      <a href="https://github.com/ejupi-djenis30/vector-placement-operations">Source repository <span aria-hidden="true">↗</span></a>
     </footer>
     <script type="module" src="app.mjs"></script>
   </body>

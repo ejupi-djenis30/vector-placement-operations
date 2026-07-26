@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a focused improvement that fits VECTOR's browser-only scope.
+description: Propose a focused improvement to VECTOR's self-hosted placement workflow.
 title: "[Feature] "
 labels: []
 assignees: []
@@ -30,18 +30,19 @@ body:
     attributes:
       label: Main area
       options:
-        - Search or filtering
-        - Cohort metrics or progress
-        - Editing or local persistence
-        - Accessibility or responsive behavior
-        - Documentation or testing
+        - Placements, evidence or readiness
+        - Students, hosts, cohorts or periods
+        - Roles, access scopes or audit
+        - Import, export or data portability
+        - Branding, accessibility or responsive behavior
+        - Deployment, backup or documentation
     validations:
       required: true
   - type: textarea
     id: boundaries
     attributes:
       label: Privacy and scope
-      description: Explain how the proposal stays browser-only and safe for synthetic data.
+      description: Explain the records involved, the minimum role that needs access and any privacy or retention impact.
     validations:
       required: true
   - type: checkboxes
@@ -51,7 +52,7 @@ body:
       options:
         - label: I searched existing issues and proposals.
           required: true
-        - label: This proposal does not require real-person records or a hosted backend.
+        - label: I did not include credentials, personal records or private placement data.
           required: true
-        - label: I did not include private placement data.
-          required: true
+        - label: I described any new access-control, audit, retention or export requirement.
+          required: false

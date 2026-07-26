@@ -1,9 +1,9 @@
 {
   "name": "vector-placement-operations",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "An interactive placement operations workspace built with synthetic data and local-only browser storage.",
+  "description": "A self-hosted placement operations platform for schools, with scoped access, audit trails and portable data.",
   "homepage": "https://ejupi-djenis30.github.io/vector-placement-operations/",
   "repository": {
     "type": "git",
@@ -13,24 +13,44 @@
   "keywords": [
     "placement-management",
     "operations-dashboard",
-    "privacy-by-design",
-    "synthetic-data"
+    "self-hosted",
+    "school-operations",
+    "sqlite"
   ],
   "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "dev": "node --env-file-if-exists=.env --watch server/index.mjs",
     "test": "node --test",
     "test:e2e": "playwright test",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
+    "db:backup": "node --env-file-if-exists=.env scripts/backup.mjs",
+    "db:inspect-backup": "node --env-file-if-exists=.env scripts/inspect-backup.mjs",
+    "db:restore": "node --env-file-if-exists=.env scripts/restore.mjs",
+    "db:compact": "node --env-file-if-exists=.env scripts/compact.mjs",
+    "admin:create": "node --env-file-if-exists=.env scripts/create-admin.mjs",
+    "doctor": "node --env-file-if-exists=.env scripts/doctor.mjs",
+    "check:audit": "npm audit --omit=dev --audit-level=high",
     "check:site": "node scripts/validate-site.mjs",
     "check:release": "node scripts/release-cli.mjs metadata",
     "release:tag-preflight": "node scripts/release-cli.mjs tag-preflight",
     "release:tag-verify": "node scripts/release-cli.mjs tag-verify",
     "release:build": "node scripts/release-cli.mjs build --output release",
     "release:verify": "node scripts/release-cli.mjs verify --directory release",
-    "check": "npm test && npm run check:site && npm run check:release"
+    "check": "npm test && npm run check:site && npm run check:release && npm run check:audit"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1"
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "better-sqlite3": "12.11.1",
+    "cookie-parser": "1.4.7",
+    "csv-parse": "7.0.1",
+    "express": "5.2.1",
+    "express-rate-limit": "8.5.2",
+    "helmet": "8.2.0",
+    "zod": "4.4.3"
   }
 }

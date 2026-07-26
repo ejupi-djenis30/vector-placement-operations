@@ -41,12 +41,12 @@ jobs:
 
   test:
     name: Node ${{ matrix.node-version }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        node-version: ["22.23.1", "24.16.0"]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,7 +58,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
           package-manager-cache: false
       - name: Install locked dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Run tests and publication checks
         run: npm run check
 
@@ -77,7 +77,7 @@ jobs:
           node-version: 24.16.0
           package-manager-cache: false
       - name: Install locked dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Install pinned Chromium runtime
         run: npx --no-install playwright install --with-deps chromium
       - name: Run browser tests
@@ -90,3 +90,63 @@ jobs:
           path: test-results/playwright
           if-no-files-found: ignore
           retention-days: 7
+
+  container-smoke:
+    name: Hardened container smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate and build the production image
+        run: |
+          docker build --check .
+          docker build --tag "vector-ci:${GITHUB_SHA}" .
+      - name: Run the image with the documented hardening controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_name="vector-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          volume_name="vector-ci-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "${container_name}" >/dev/null 2>&1 || true
+            docker volume rm "${volume_name}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker volume create "${volume_name}" >/dev/null
+          docker run --detach \
+            --name "${container_name}" \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 256 \
+            --publish 127.0.0.1:4173:4173 \
+            --mount "type=volume,source=${volume_name},target=/var/lib/vector" \
+            --env NODE_ENV=production \
+            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
+            --env VECTOR_COOKIE_SECURE=false \
+            --env VECTOR_BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
+            --env VECTOR_BOOTSTRAP_ADMIN_NAME="CI administrator" \
+            --env VECTOR_BOOTSTRAP_ADMIN_PASSWORD="ci-only-vector-password-2026" \
+            --env VECTOR_SEED_SYNTHETIC=true \
+            "vector-ci:${GITHUB_SHA}" >/dev/null
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:4173/api/health/ready >/dev/null; then
+              break
+            fi
+            if [[ "${attempt}" == "30" ]]; then
+              docker logs "${container_name}"
+              exit 1
+            fi
+            sleep 1
+          done
+          [[ "$(docker inspect --format '{{.Config.User}}' "${container_name}")" == "node" ]]
+          [[ "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "${container_name}")" == "true" ]]
+          docker inspect --format '{{json .HostConfig.CapDrop}}' "${container_name}" | grep --fixed-strings '"ALL"'
+          docker inspect --format '{{json .HostConfig.SecurityOpt}}' "${container_name}" \
+            | grep --fixed-strings 'no-new-privileges'
+          docker exec "${container_name}" npm run doctor

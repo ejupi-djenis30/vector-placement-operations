@@ -15,7 +15,7 @@ class FakeGitHub {
   constructor({
     verified = true,
     immutable = true,
-    taggerName = "Djenis Ejupi",
+    taggerName = "ejupi-djenis30",
     taggerEmail = "69587167+ejupi-djenis30@users.noreply.github.com",
   } = {}) {
     this.verified = verified;
@@ -35,7 +35,7 @@ class FakeGitHub {
   async tagObject() {
     return {
       sha: TAG_SHA,
-      tag: "v2.0.1",
+      tag: "v3.0.0",
       tagger: { name: this.taggerName, email: this.taggerEmail },
       verification: { verified: this.verified },
       object: { type: "commit", sha: COMMIT },
@@ -104,14 +104,19 @@ async function fixture(context) {
   const root = await mkdtemp(resolve(tmpdir(), "vector-publisher-"));
   context.after(() => rm(root, { recursive: true, force: true }));
   const directory = resolve(root, "release");
-  await buildReleaseCandidate({ output: directory, sourceCommit: COMMIT, tag: "v2.0.1" });
+  await buildReleaseCandidate({
+    output: directory,
+    sourceCommit: COMMIT,
+    tag: "v3.0.0",
+    verifySource: false,
+  });
   return directory;
 }
 
 function publish(directory, client) {
   return publishReleaseCandidate({
     directory,
-    tag: "v2.0.1",
+    tag: "v3.0.0",
     repository: "ejupi-djenis30/vector-placement-operations",
     defaultBranch: "main",
     sourceCommit: COMMIT,
@@ -143,7 +148,7 @@ test("GitHub client uploads a file with the release command's length-aware trans
   await client.uploadAsset(
     {
       id: 7,
-      tag_name: "v2.0.1",
+      tag_name: "v3.0.0",
       upload_url:
         "https://uploads.github.com/repos/ejupi-djenis30/vector-placement-operations/releases/7/assets{?name,label}",
     },
@@ -154,7 +159,7 @@ test("GitHub client uploads a file with the release command's length-aware trans
     args: [
       "release",
       "upload",
-      "v2.0.1",
+      "v3.0.0",
       path,
       "--repo",
       "ejupi-djenis30/vector-placement-operations",
@@ -235,7 +240,7 @@ test("publisher refuses a foreign draft", async (context) => {
   const client = new FakeGitHub();
   client.release = {
     id: 7,
-    tag_name: "v2.0.1",
+    tag_name: "v3.0.0",
     target_commitish: COMMIT,
     name: "Foreign draft",
     body: "Unrelated body",
@@ -261,7 +266,7 @@ test("publisher rejects non-tag and disabled publication contexts before GitHub 
   await assert.rejects(
     () => publishReleaseCandidate({
       directory,
-      tag: "v2.0.1",
+      tag: "v3.0.0",
       repository: "ejupi-djenis30/vector-placement-operations",
       defaultBranch: "main",
       sourceCommit: COMMIT,

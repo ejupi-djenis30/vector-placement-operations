@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
-  <title id="title">VECTOR — Every placement, one clear picture</title>
-  <desc id="description">A navy and cream preview of the VECTOR placement operations workspace.</desc>
+  <title id="title">VECTOR — Self-hosted placement operations for schools</title>
+  <desc id="description">A navy and cream preview of VECTOR showing an accountable placement workflow and its readiness checks.</desc>
   <defs>
     <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
       <path d="M48 0H0V48" fill="none" stroke="#17324d" stroke-opacity=".07" />
@@ -24,49 +24,60 @@
 
   <g transform="translate(78 216)">
     <text fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="64" font-weight="800" letter-spacing="-3">
-      <tspan x="0" y="0">Every placement.</tspan>
-      <tspan x="0" y="74" fill="#bc3c2c">One clear picture.</tspan>
+      <tspan x="0" y="0">Placement records.</tspan>
+      <tspan x="0" y="74" fill="#bc3c2c">School-controlled.</tspan>
     </text>
-    <text x="2" y="136" fill="#666c6f" font-family="Arial, Helvetica, sans-serif" font-size="22">Search, review progress and move milestones forward.</text>
+    <text x="2" y="136" fill="#666c6f" font-family="Arial, Helvetica, sans-serif" font-size="22">Assign, verify and close every record with evidence.</text>
     <g transform="translate(2 181)">
       <circle cx="6" cy="6" r="6" fill="#3b735b" />
-      <text x="22" y="12" fill="#17324d" font-family="monospace" font-size="14" font-weight="700" letter-spacing="1.5">SYNTHETIC DATA · BROWSER ONLY</text>
+      <text x="22" y="12" fill="#17324d" font-family="monospace" font-size="14" font-weight="700" letter-spacing="1.5">SELF-HOSTED · ROLE-SCOPED · AUDITED</text>
     </g>
   </g>
 
   <g transform="translate(756 72)" filter="url(#shadow)">
     <rect width="366" height="486" rx="26" fill="#17324d" />
-    <text x="34" y="48" fill="#f5efe5" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" letter-spacing="1">CURRENT COHORT</text>
-    <rect x="34" y="76" width="140" height="108" rx="12" fill="#fffaf2" />
-    <rect x="192" y="76" width="140" height="108" rx="12" fill="#ff6b56" />
-    <text x="52" y="111" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700">PLACEMENTS</text>
-    <text x="52" y="157" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800">06</text>
-    <text x="210" y="111" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700">COMPLETION</text>
-    <text x="210" y="157" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800">67%</text>
+    <text x="34" y="48" fill="#f5efe5" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" letter-spacing="1">PLACEMENT / ACTIVE</text>
 
-    <g transform="translate(34 214)">
-      <rect width="298" height="68" rx="10" fill="#fffaf2" />
-      <circle cx="34" cy="34" r="18" fill="#f5efe5" />
-      <text x="23" y="39" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">NB</text>
-      <text x="64" y="30" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">Noah Bennett</text>
-      <text x="64" y="49" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="11">Fieldnote Studio</text>
-      <rect x="228" y="25" width="48" height="18" rx="9" fill="#dce8f1" />
+    <g transform="translate(34 76)">
+      <rect width="88" height="72" rx="12" fill="#fffaf2" />
+      <rect x="105" width="88" height="72" rx="12" fill="#fffaf2" />
+      <rect x="210" width="88" height="72" rx="12" fill="#ff6b56" />
+      <text x="14" y="27" fill="#bc3c2c" font-family="monospace" font-size="12" font-weight="700">01</text>
+      <text x="14" y="50" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800">ASSIGN</text>
+      <text x="119" y="27" fill="#bc3c2c" font-family="monospace" font-size="12" font-weight="700">02</text>
+      <text x="119" y="50" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800">TRACK</text>
+      <text x="224" y="27" fill="#fffaf2" font-family="monospace" font-size="12" font-weight="700">03</text>
+      <text x="224" y="50" fill="#fffaf2" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="800">CLOSE</text>
     </g>
-    <g transform="translate(34 296)">
-      <rect width="298" height="68" rx="10" fill="#fffaf2" />
-      <circle cx="34" cy="34" r="18" fill="#f5efe5" />
-      <text x="24" y="39" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">SM</text>
-      <text x="64" y="30" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">Sofia Marin</text>
-      <text x="64" y="49" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="11">Cobalt Systems</text>
-      <rect x="228" y="25" width="48" height="18" rx="9" fill="#f8dcd7" />
+
+    <g transform="translate(34 178)">
+      <text x="0" y="18" fill="#f5efe5" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">PLACEMENT READINESS</text>
+      <text x="298" y="18" fill="#ff6b56" font-family="monospace" font-size="14" font-weight="700" text-anchor="end">3 / 3</text>
+      <rect y="36" width="298" height="8" rx="4" fill="#34516c" />
+      <rect y="36" width="298" height="8" rx="4" fill="#ff6b56" />
     </g>
-    <g transform="translate(34 378)">
-      <rect width="298" height="68" rx="10" fill="#fffaf2" />
-      <circle cx="34" cy="34" r="18" fill="#f5efe5" />
-      <text x="24" y="39" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">LD</text>
-      <text x="64" y="30" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">Lea Dubois</text>
-      <text x="64" y="49" fill="#66717a" font-family="Arial, Helvetica, sans-serif" font-size="11">Atlas Workshop</text>
-      <rect x="228" y="25" width="48" height="18" rx="9" fill="#dce8f1" />
+
+    <g transform="translate(34 252)">
+      <rect width="298" height="56" rx="10" fill="#fffaf2" />
+      <circle cx="28" cy="28" r="10" fill="#3b735b" />
+      <path d="m23 28 4 4 7-9" fill="none" stroke="#fffaf2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="52" y="24" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">VERIFIED HOURS</text>
+      <text x="52" y="42" fill="#66717a" font-family="monospace" font-size="12">TARGET REACHED</text>
     </g>
+    <g transform="translate(34 322)">
+      <rect width="298" height="56" rx="10" fill="#fffaf2" />
+      <circle cx="28" cy="28" r="10" fill="#3b735b" />
+      <path d="m23 28 4 4 7-9" fill="none" stroke="#fffaf2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="52" y="24" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">CHECK-IN</text>
+      <text x="52" y="42" fill="#66717a" font-family="monospace" font-size="12">FOLLOW-UP RECORDED</text>
+    </g>
+    <g transform="translate(34 392)">
+      <rect width="298" height="56" rx="10" fill="#fffaf2" />
+      <circle cx="28" cy="28" r="10" fill="#3b735b" />
+      <path d="m23 28 4 4 7-9" fill="none" stroke="#fffaf2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="52" y="24" fill="#17324d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800">REQUIRED EVIDENCE</text>
+      <text x="52" y="42" fill="#66717a" font-family="monospace" font-size="12">SIGNED AND REVIEWED</text>
+    </g>
+    <text x="183" y="472" fill="#9fb0bf" font-family="monospace" font-size="11" letter-spacing="1.2" text-anchor="middle">LOCAL SQLITE · YOUR INFRASTRUCTURE</text>
   </g>
 </svg>

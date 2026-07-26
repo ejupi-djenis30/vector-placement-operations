@@ -6,6 +6,16 @@ Notable changes to VECTOR are recorded here.
 
 - No unreleased changes.
 
+## 3.0.0 — 2026-07-26
+
+- Rebuilt VECTOR as a self-hosted, multi-user placement operations platform.
+- Added persistent SQLite storage with versioned migrations, scoped roles, secure sessions and
+  append-only audit records.
+- Added runtime school branding, placement evidence and completion-readiness controls.
+- Added validated CSV import, scoped CSV/JSON export and operator-facing backup, restore and
+  diagnostics commands.
+- Added container deployment files and production operation guides.
+
 ## 2.0.1 — 2026-07-23
 
 - Carries the 2.0.0 browser runtime forward unchanged; application behaviour and the data model are

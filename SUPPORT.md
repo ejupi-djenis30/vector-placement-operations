@@ -4,16 +4,24 @@
 
 Open a
 [bug report](https://github.com/ejupi-djenis30/vector-placement-operations/issues/new?template=bug_report.yml)
-with the affected commit, browser and operating system, the smallest safe reproduction, and the
-checks you already ran. Use the bundled fictional cohort. Remove real student, school, employer, and
-staff data from screenshots, exports, storage dumps, and console output before posting.
+with the affected version, deployment mode, browser or runtime, the smallest safe reproduction and
+the checks you already ran. For a self-hosted installation, include the redacted result of
+`npm run doctor` when it is relevant.
+
+Use synthetic records. Remove real student, school, host and staff data from screenshots, exports,
+database output and logs before posting. Remove credentials, tokens, cookies, private hostnames and
+environment values as well.
 
 ## You want to propose a change
 
 Use the
 [feature request](https://github.com/ejupi-djenis30/vector-placement-operations/issues/new?template=feature_request.yml)
 and explain the placement task it would improve. Describe the behavior a user should see and how the
-proposal preserves the browser-only, synthetic-data boundary.
+proposal preserves access boundaries, auditability and safe data handling.
+
+Questions about installation, upgrades and recovery should first be checked against the
+[self-hosting](docs/self-hosting.md) and
+[backup and restore](docs/backup-restore.md) guides.
 
 ## The report is sensitive
 

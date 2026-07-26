@@ -6,29 +6,41 @@ import { constants } from "node:fs";
 import {
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   readdir,
+  rm,
   writeFile,
 } from "node:fs/promises";
-import { basename, relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repositoryRoot = resolve(fileURLToPath(new URL("../", import.meta.url)));
 export const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export const sourceCommitPattern = /^[0-9a-f]{40}$/;
 export const canonicalGzipOperatingSystem = 0xff;
-export const releaseTaggerName = "Djenis Ejupi";
+export const releaseTaggerName = "ejupi-djenis30";
 export const releaseTaggerEmail = "69587167+ejupi-djenis30@users.noreply.github.com";
 export const releaseSigningKeyAlgorithm = "ED25519";
 export const releaseSigningKeyFingerprint = "SHA256:vD5T1C1y72LRlZFUt8IiscOVuJ+x0+IKZ3C2yZ+h/hQ";
+export const releaseSigningPublicKey =
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAj9murjh5p7F7XXUpX9WmRQF6vJzWQfWoZPJwUns/iF";
 
-const inventorySchema = "https://ejupilabs.com/schemas/vector/site-inventory/v1";
-const releaseSchema = "https://ejupilabs.com/schemas/vector/release-manifest/v1";
+const inventorySchema = "https://ejupilabs.com/schemas/vector/product-inventory/v2";
+const releaseSchema = "https://ejupilabs.com/schemas/vector/release-manifest/v2";
 const releasePolicySchema = "https://ejupilabs.com/schemas/vector/release-policy/v2";
 const archiveRoot = (version) => `vector-placement-operations-${version}`;
 const gzipHeaderLength = 10;
 const gzipOperatingSystemOffset = 9;
+const maxReleaseInputBytes = 5 * 1024 * 1024;
+const maxReleaseSourceBytes = 25 * 1024 * 1024;
+const privateKeyBoundaryPattern = new RegExp(
+  "-----BEGIN " +
+  "(?:(?:(?:OPENSSH|RSA|EC|DSA) )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)" +
+  "-----",
+);
 
 function utf8Compare(left, right) {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
@@ -36,6 +48,44 @@ function utf8Compare(left, right) {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function assertReleaseInputAllowed(relativePath, bytes) {
+  assert.equal(typeof relativePath, "string", "Release input path must be a string.");
+  assert.ok(Buffer.isBuffer(bytes), `Release input must be read as bytes: ${relativePath}`);
+  const normalized = relativePath.replaceAll("\\", "/");
+  const lower = normalized.toLowerCase();
+  const segments = lower.split("/");
+  const name = segments.at(-1);
+  assert.ok(
+    !segments.slice(0, -1).some((segment) => ["backup", "backups", "data"].includes(segment)),
+    `Operational data directory is forbidden in a release: ${relativePath}`,
+  );
+  assert.ok(
+    lower === ".env.example" || (name !== ".env" && !name.startsWith(".env.")),
+    `Environment file is forbidden in a release: ${relativePath}`,
+  );
+  assert.ok(
+    !/\.(?:sqlite3?|db)(?:[-.](?:wal|shm|journal|backup|manifest\.json))?$/i.test(name)
+      && !/\.(?:backup|bak|log)(?:[-.].*)?$/i.test(name)
+      && !/\.(?:pem|key|p12|pfx|jks|keystore|kdbx|age|gpg)$/i.test(name)
+      && !/^(?:id_(?:rsa|dsa|ecdsa|ed25519)|\.npmrc|\.netrc)$/i.test(name),
+    `Database, backup or log file is forbidden in a release: ${relativePath}`,
+  );
+  assert.ok(
+    bytes.length > 0 && bytes.length <= maxReleaseInputBytes,
+    `Release input size is outside the supported range: ${relativePath}`,
+  );
+  assert.equal(
+    bytes.subarray(0, 16).equals(Buffer.from("SQLite format 3\0", "binary")),
+    false,
+    `SQLite content is forbidden in a release: ${relativePath}`,
+  );
+  assert.doesNotMatch(
+    bytes.toString("latin1"),
+    privateKeyBoundaryPattern,
+    `Private-key content is forbidden in a release: ${relativePath}`,
+  );
 }
 
 function stableJson(value) {
@@ -94,8 +144,8 @@ function validateReleasePolicy(value) {
   assert.equal(value.tagger.email, releaseTaggerEmail, "release-policy.json has an unexpected tagger email.");
   assert.deepEqual(
     Object.keys(value.signingKey ?? {}).sort(),
-    ["algorithm", "fingerprint"],
-    "release-policy.json must define exactly one signing-key algorithm and fingerprint.",
+    ["algorithm", "fingerprint", "publicKey"],
+    "release-policy.json must define exactly one signing-key algorithm, fingerprint and public key.",
   );
   assert.equal(
     value.signingKey.algorithm,
@@ -106,6 +156,11 @@ function validateReleasePolicy(value) {
     value.signingKey.fingerprint,
     releaseSigningKeyFingerprint,
     "release-policy.json has an unexpected signing-key fingerprint.",
+  );
+  assert.equal(
+    value.signingKey.publicKey,
+    releaseSigningPublicKey,
+    "release-policy.json has an unexpected signing public key.",
   );
   return {
     signingKey: {
@@ -326,6 +381,137 @@ async function collectFiles(root) {
   return files.sort((left, right) => utf8Compare(left.path, right.path));
 }
 
+const releaseFileInputs = Object.freeze([
+  ".github/dependabot.yml",
+  ".github/ISSUE_TEMPLATE/bug_report.yml",
+  ".github/ISSUE_TEMPLATE/config.yml",
+  ".github/ISSUE_TEMPLATE/feature_request.yml",
+  ".github/workflows/ci.yml",
+  ".github/workflows/pages.yml",
+  ".github/workflows/release.yml",
+  ".dockerignore",
+  ".env.example",
+  ".gitignore",
+  "CHANGELOG.md",
+  "CODE_OF_CONDUCT.md",
+  "CONTRIBUTING.md",
+  "Dockerfile",
+  "LICENSE",
+  "README.md",
+  "SECURITY.md",
+  "SUPPORT.md",
+  "compose.yaml",
+  "docs/backup-restore.md",
+  "docs/import-export.md",
+  "docs/privacy-and-retention.md",
+  "docs/releasing.md",
+  "docs/self-hosting.md",
+  "e2e/presentation.spec.mjs",
+  "e2e/workspace.spec.mjs",
+  "migrations/001_initial.sql",
+  "package-lock.json",
+  "package.json",
+  "playwright.config.mjs",
+  "release-policy.json",
+  "scripts/backup-lib.mjs",
+  "scripts/backup.mjs",
+  "scripts/cli-args.mjs",
+  "scripts/compact.mjs",
+  "scripts/create-admin.mjs",
+  "scripts/doctor.mjs",
+  "scripts/inspect-backup.mjs",
+  "scripts/migrate.mjs",
+  "scripts/publish-release.mjs",
+  "scripts/release-cli.mjs",
+  "scripts/release-lib.mjs",
+  "scripts/restore.mjs",
+  "scripts/serve-e2e.mjs",
+  "scripts/serve-site.mjs",
+  "scripts/validate-site.mjs",
+  "server/app.mjs",
+  "server/audit.mjs",
+  "server/auth.mjs",
+  "server/branding.mjs",
+  "server/config.mjs",
+  "server/cursor.mjs",
+  "server/data.mjs",
+  "server/db.mjs",
+  "server/errors.mjs",
+  "server/index.mjs",
+  "server/password.mjs",
+  "server/portability.mjs",
+  "server/rbac.mjs",
+  "server/routes.mjs",
+  "server/schemas.mjs",
+  "server/school-time.mjs",
+  "server/static.mjs",
+  "server/users.mjs",
+  "server/validation.mjs",
+  "server/version.mjs",
+  "site/api/public/branding.css",
+  "site/app.mjs",
+  "site/app/index.html",
+  "site/app/workspace.mjs",
+  "site/assets/social-preview.png",
+  "site/assets/social-preview.svg",
+  "site/assets/vector-lockup.svg",
+  "site/assets/vector-mark.svg",
+  "site/index.html",
+  "site/robots.txt",
+  "site/styles.css",
+  "test-support/server-test-helper.mjs",
+  "test/auth-races.integration.test.mjs",
+  "test/clean-install.integration.test.mjs",
+  "test/lifecycle-integrity.integration.test.mjs",
+  "test/operations.integration.test.mjs",
+  "test/release-contract.test.mjs",
+  "test/release-publisher.test.mjs",
+  "test/release-workflow-contract.test.mjs",
+  "test/school-time.test.mjs",
+  "test/security-boundaries.test.mjs",
+  "test/server.integration.test.mjs",
+]);
+
+async function collectReleaseFiles() {
+  const files = [];
+  for (const input of releaseFileInputs) {
+    files.push({
+      bytes: await readRegularFile(resolve(repositoryRoot, input), "Release input"),
+      path: input,
+    });
+  }
+  files.sort((left, right) => utf8Compare(left.path, right.path));
+  for (const file of files) assertReleaseInputAllowed(file.path, file.bytes);
+  assert.ok(
+    files.reduce((total, file) => total + file.bytes.length, 0) <= maxReleaseSourceBytes,
+    "Release source inputs exceed the supported aggregate size.",
+  );
+  assert.equal(
+    new Set(files.map((file) => file.path)).size,
+    files.length,
+    "Release inputs must not contain duplicate paths.",
+  );
+  return files;
+}
+
+export function validateReleaseSourceState({
+  runGit = executeGit,
+  sourceCommit,
+} = {}) {
+  assert.match(sourceCommit, sourceCommitPattern, "A lowercase 40-character source commit is required.");
+  const head = singleLine(
+    gitOutput(runGit, ["rev-parse", "--verify", "HEAD"]).stdout,
+    "Release source HEAD",
+  );
+  assert.equal(head, sourceCommit, "Release sourceCommit does not match the checked-out HEAD.");
+  const status = gitOutput(
+    runGit,
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+  ).stdout;
+  assert.equal(status, "", "Release source tree must be clean, including untracked files.");
+  return { sourceCommit };
+}
+
 function writeAscii(buffer, value, offset, length) {
   const bytes = Buffer.from(value, "ascii");
   assert.ok(bytes.length <= length, `Archive field is too long: ${value}`);
@@ -478,8 +664,49 @@ function inventoryFor(files, version, sourceCommit) {
   };
 }
 
-function sbomFor(version, sourceCommit) {
+async function sbomFor(version, sourceCommit) {
   const reference = `pkg:npm/vector-placement-operations@${version}`;
+  const packageJson = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8"));
+  const packageLock = JSON.parse(await readFile(resolve(repositoryRoot, "package-lock.json"), "utf8"));
+  const packageEntries = new Map();
+
+  function purl(name, dependencyVersion) {
+    const normalizedName = name.startsWith("@")
+      ? `%40${encodeURIComponent(name.slice(1).split("/")[0])}/${encodeURIComponent(name.split("/")[1])}`
+      : encodeURIComponent(name);
+    return `pkg:npm/${normalizedName}@${dependencyVersion}`;
+  }
+
+  for (const [packagePath, metadata] of Object.entries(packageLock.packages ?? {})) {
+    const marker = "node_modules/";
+    const markerIndex = packagePath.lastIndexOf(marker);
+    if (markerIndex < 0 || metadata.dev === true || !metadata.version) continue;
+    const name = packagePath.slice(markerIndex + marker.length);
+    const bomRef = purl(name, metadata.version);
+    if (packageEntries.has(bomRef)) continue;
+    packageEntries.set(bomRef, {
+      type: "library",
+      "bom-ref": bomRef,
+      name,
+      version: metadata.version,
+      purl: bomRef,
+      ...(typeof metadata.license === "string"
+        ? {
+            licenses: [/^[A-Za-z0-9.+-]+$/.test(metadata.license)
+              ? { license: { id: metadata.license } }
+              : { expression: metadata.license }],
+          }
+        : {}),
+    });
+  }
+
+  const directDependencies = Object.keys(packageJson.dependencies ?? {}).map((name) => {
+    const metadata = packageLock.packages?.[`node_modules/${name}`];
+    assert.ok(metadata?.version, `package-lock.json is missing runtime dependency ${name}.`);
+    return purl(name, metadata.version);
+  }).sort(utf8Compare);
+  const components = [...packageEntries.values()]
+    .sort((left, right) => utf8Compare(left["bom-ref"], right["bom-ref"]));
   return {
     bomFormat: "CycloneDX",
     specVersion: "1.6",
@@ -493,17 +720,17 @@ function sbomFor(version, sourceCommit) {
         licenses: [{ license: { id: "MIT" } }],
         properties: [
           { name: "vector:source-commit", value: sourceCommit },
-          { name: "vector:runtime-dependencies", value: "none" },
+          { name: "vector:runtime-dependencies", value: String(components.length) },
         ],
       },
     },
-    components: [],
-    dependencies: [{ ref: reference, dependsOn: [] }],
+    components,
+    dependencies: [{ ref: reference, dependsOn: directDependencies }],
   };
 }
 
 function expectedNames(version) {
-  const prefix = `vector-site-${version}`;
+  const prefix = `vector-self-hosted-${version}`;
   return [
     "RELEASE_NOTES.md",
     "SHA256SUMS",
@@ -520,20 +747,27 @@ async function writeExclusive(path, bytes) {
   await writeFile(path, bytes, { flag: "wx" });
 }
 
-export async function buildReleaseCandidate({ output, sourceCommit, tag } = {}) {
+export async function buildReleaseCandidate({
+  output,
+  sourceCommit,
+  tag,
+  verifySource = true,
+  runGit = executeGit,
+} = {}) {
   assert.match(sourceCommit, sourceCommitPattern, "A lowercase 40-character source commit is required.");
+  if (verifySource) validateReleaseSourceState({ runGit, sourceCommit });
   const metadata = await validateReleaseMetadata({ tag });
   const outputDirectory = resolve(output);
   await mkdir(outputDirectory);
 
-  const siteRoot = resolve(repositoryRoot, "site");
-  const files = await collectFiles(siteRoot);
-  const prefix = `vector-site-${metadata.version}`;
+  const files = await collectReleaseFiles();
+  if (verifySource) validateReleaseSourceState({ runGit, sourceCommit });
+  const prefix = `vector-self-hosted-${metadata.version}`;
   const assets = new Map([
     [`${prefix}.zip`, buildZip(files, metadata.version)],
     [`${prefix}.tar.gz`, buildTarGzip(files, metadata.version)],
     [`${prefix}.inventory.json`, Buffer.from(stableJson(inventoryFor(files, metadata.version, sourceCommit)))],
-    [`${prefix}.cdx.json`, Buffer.from(stableJson(sbomFor(metadata.version, sourceCommit)))],
+    [`${prefix}.cdx.json`, Buffer.from(stableJson(await sbomFor(metadata.version, sourceCommit)))],
     ["SOURCE_COMMIT", Buffer.from(`${sourceCommit}\n`)],
     ["RELEASE_NOTES.md", Buffer.from(`# VECTOR ${metadata.version}\n\n${metadata.notes}`)],
   ]);
@@ -727,25 +961,24 @@ export async function verifyReleaseCandidate({ directory, sourceCommit, tag } = 
     assert.equal(sha256(await readFile(resolve(root, row.name))), row.digest, `Checksum mismatch for ${row.name}.`);
   }
 
-  const siteFiles = await collectFiles(resolve(repositoryRoot, "site"));
-  const prefix = `vector-site-${metadata.version}`;
+  const releaseFiles = await collectReleaseFiles();
+  const prefix = `vector-self-hosted-${metadata.version}`;
   const inventory = JSON.parse(await readFile(resolve(root, `${prefix}.inventory.json`), "utf8"));
-  validateInventory(inventory, siteFiles, metadata.version, candidateCommit);
+  validateInventory(inventory, releaseFiles, metadata.version, candidateCommit);
 
   const tarGzip = await readFile(resolve(root, `${prefix}.tar.gz`));
   assertCanonicalGzipHeader(tarGzip);
   const tarInventory = archiveInventory(readTarFiles(tarGzip, metadata.version), metadata.version);
   const zipInventory = archiveInventory(readZipFiles(await readFile(resolve(root, `${prefix}.zip`)), metadata.version), metadata.version);
-  assert.deepEqual(tarInventory, inventory.files, "The tar.gz content differs from the site inventory.");
-  assert.deepEqual(zipInventory, inventory.files, "The ZIP content differs from the site inventory.");
+  assert.deepEqual(tarInventory, inventory.files, "The tar.gz content differs from the release inventory.");
+  assert.deepEqual(zipInventory, inventory.files, "The ZIP content differs from the release inventory.");
 
   const sbom = JSON.parse(await readFile(resolve(root, `${prefix}.cdx.json`), "utf8"));
-  assert.equal(sbom.bomFormat, "CycloneDX");
-  assert.equal(sbom.specVersion, "1.6");
-  assert.equal(sbom.metadata?.component?.name, "vector-placement-operations");
-  assert.equal(sbom.metadata?.component?.version, metadata.version);
-  assert.deepEqual(sbom.components, [], "Static VECTOR releases must not claim runtime dependencies.");
-  assert.deepEqual(sbom.dependencies, [{ ref: `pkg:npm/vector-placement-operations@${metadata.version}`, dependsOn: [] }]);
+  assert.deepEqual(
+    sbom,
+    await sbomFor(metadata.version, candidateCommit),
+    "The CycloneDX SBOM differs from the locked runtime dependencies.",
+  );
 
   assert.equal(
     await readFile(resolve(root, "RELEASE_NOTES.md"), "utf8"),
@@ -783,6 +1016,105 @@ export async function compareReleaseCandidates({ directory, otherDirectory, sour
     );
   }
   return first;
+}
+
+async function extractTarGzipArchive(archive, destination, version) {
+  const entries = readTarFiles(await readFile(archive));
+  const prefix = `${archiveRoot(version)}/`;
+  const root = resolve(destination, archiveRoot(version));
+  await mkdir(root, { recursive: false });
+  const seen = new Set();
+  for (const entry of entries) {
+    assert.ok(entry.path.startsWith(prefix), `Archive entry is outside ${prefix}: ${entry.path}`);
+    const relativePath = entry.path.slice(prefix.length);
+    const segments = relativePath.split("/");
+    assert.ok(
+      relativePath !== ""
+      && !segments.includes("")
+      && !segments.includes(".")
+      && !segments.includes(".."),
+      `Unsafe archive entry: ${entry.path}`,
+    );
+    assert.equal(seen.has(relativePath), false, `Duplicate archive entry: ${relativePath}`);
+    seen.add(relativePath);
+    const target = resolve(root, ...segments);
+    assert.ok(target.startsWith(`${root}${sep}`), `Archive entry escaped extraction root: ${entry.path}`);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, entry.bytes, { flag: "wx", mode: 0o600 });
+  }
+  return root;
+}
+
+function runAcceptanceCommand(command, arguments_, options) {
+  const result = spawnSync(command, arguments_, {
+    ...options,
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  assert.ifError(result.error);
+  assert.equal(
+    result.status,
+    0,
+    `${command} ${arguments_.join(" ")} failed:\n${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  );
+}
+
+export async function acceptReleaseCandidate({ directory, sourceCommit, tag } = {}) {
+  const verified = await verifyReleaseCandidate({ directory, sourceCommit, tag });
+  const temporary = await mkdtemp(join(tmpdir(), "vector-release-acceptance-"));
+  try {
+    const archive = resolve(
+      directory,
+      `vector-self-hosted-${verified.version}.tar.gz`,
+    );
+    const root = await extractTarGzipArchive(archive, temporary, verified.version);
+    const npm = process.platform === "win32" ? process.execPath : "npm";
+    const npmArguments = process.platform === "win32"
+      ? [resolve(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")]
+      : [];
+    const environment = {
+      ...process.env,
+      VECTOR_RELEASE_ACCEPTANCE_CHILD: "1",
+    };
+    runAcceptanceCommand(npm, [...npmArguments, "ci", "--no-audit", "--no-fund"], {
+      cwd: root,
+      env: environment,
+    });
+    runAcceptanceCommand(npm, [...npmArguments, "test"], { cwd: root, env: environment });
+    runAcceptanceCommand(npm, [...npmArguments, "run", "check:site"], { cwd: root, env: environment });
+    runAcceptanceCommand(npm, [...npmArguments, "run", "check:release"], { cwd: root, env: environment });
+
+    const databasePath = resolve(root, "acceptance-data", "vector.sqlite");
+    const runtimeEnvironment = {
+      ...environment,
+      NODE_ENV: "production",
+      VECTOR_DB_PATH: databasePath,
+      VECTOR_ORIGIN: "http://127.0.0.1:4173",
+      VECTOR_COOKIE_SECURE: "false",
+      VECTOR_TRUST_PROXY: "false",
+      VECTOR_BOOTSTRAP_ADMIN_PASSWORD: "release-acceptance-password-2026",
+      VECTOR_BOOTSTRAP_TIME_ZONE: "Europe/Zurich",
+      VECTOR_SEED_SYNTHETIC: "false",
+      VECTOR_LOG_LEVEL: "silent",
+    };
+    runAcceptanceCommand(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        "const {buildApp}=await import('./server/app.mjs');const app=await buildApp();app.locals.vector.close();",
+      ],
+      { cwd: root, env: runtimeEnvironment },
+    );
+    runAcceptanceCommand(npm, [...npmArguments, "run", "doctor"], {
+      cwd: root,
+      env: runtimeEnvironment,
+    });
+    return { sourceCommit: verified.sourceCommit, version: verified.version };
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 }
 
 export async function releaseAssetManifest(directory) {
