@@ -253,7 +253,7 @@ for (const script of [
 assert(/Released under the \[MIT License\]\(LICENSE\)\./i.test(readme), "README must link the MIT license.");
 
 for (const token of [
-  "FROM node:22.23.1-bookworm-slim@sha256:",
+  "FROM node:26.5.0-bookworm-slim@sha256:",
   "scripts/compact.mjs",
   "USER node",
   'CMD ["node", "server/index.mjs"]',
@@ -261,8 +261,8 @@ for (const token of [
   assert(dockerfile.includes(token), `Dockerfile is missing ${token}`);
 }
 assert(
-  (dockerfile.match(/FROM node:22\.23\.1-bookworm-slim@sha256:[0-9a-f]{64}/g) ?? []).length === 2,
-  "Both Docker stages must pin the Node 22 runtime by digest.",
+  (dockerfile.match(/FROM node:26\.5\.0-bookworm-slim@sha256:[0-9a-f]{64}/g) ?? []).length === 2,
+  "Both Docker stages must pin the Node 26 runtime by digest.",
 );
 for (const token of [
   "read_only: true",
