@@ -39,19 +39,19 @@
     "check": "npm test && npm run check:site && npm run check:release && npm run check:audit"
   },
   "devDependencies": {
-    "@playwright/test": "1.61.1",
+    "@playwright/test": "1.62.0",
     "parse5": "8.0.1"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "better-sqlite3": "12.11.1",
+    "better-sqlite3": "13.0.1",
     "cookie-parser": "1.4.7",
     "csv-parse": "7.0.1",
     "express": "5.2.1",
-    "express-rate-limit": "8.5.2",
-    "helmet": "8.2.0",
+    "express-rate-limit": "8.6.0",
+    "helmet": "8.3.0",
     "zod": "4.4.3"
   }
 }
