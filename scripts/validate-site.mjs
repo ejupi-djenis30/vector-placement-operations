@@ -1,8 +1,20 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import { assertExternalScriptsOnly } from "./site-validation.mjs";
+import {
+  assertExternalScriptsOnly,
+  assertRobotsTxt,
+  assertSecurityTxt,
+  assertSitemapXml,
+} from "./site-validation.mjs";
 
+const PROJECT_PATH = "/vector-placement-operations/";
 const PAGE_URL = "https://ejupi-djenis30.github.io/vector-placement-operations/";
 const SOCIAL_IMAGE_URL = `${PAGE_URL}assets/social-preview.png`;
+const SITEMAP_URL = `${PAGE_URL}sitemap.xml`;
+const SECURITY_URL = `${PAGE_URL}.well-known/security.txt`;
+const SECURITY_CONTACT_URL =
+  "https://github.com/ejupi-djenis30/vector-placement-operations/security/advisories/new";
+const SECURITY_POLICY_URL =
+  "https://github.com/ejupi-djenis30/vector-placement-operations/security/policy";
 const siteRoot = new URL("../site/", import.meta.url);
 const repositoryRoot = new URL("../", siteRoot);
 
@@ -58,6 +70,8 @@ const [
   marketingApp,
   workspaceApp,
   robots,
+  sitemap,
+  security,
   readme,
   packageText,
   releasePolicyText,
@@ -81,6 +95,8 @@ const [
   readFile(new URL("app.mjs", siteRoot), "utf8"),
   readFile(new URL("app/workspace.mjs", siteRoot), "utf8"),
   readFile(new URL("robots.txt", siteRoot), "utf8"),
+  readFile(new URL("sitemap.xml", siteRoot), "utf8"),
+  readFile(new URL(".well-known/security.txt", siteRoot), "utf8"),
   readFile(new URL("README.md", repositoryRoot), "utf8"),
   readFile(new URL("package.json", repositoryRoot), "utf8"),
   readFile(new URL("release-policy.json", repositoryRoot), "utf8"),
@@ -113,6 +129,8 @@ for (const file of [
   "assets/social-preview.svg",
   "assets/social-preview.png",
   "robots.txt",
+  "sitemap.xml",
+  ".well-known/security.txt",
 ]) {
   const metadata = await stat(new URL(file, siteRoot));
   assert(metadata.isFile(), `Required publication file is not regular: ${file}`);
@@ -165,7 +183,13 @@ assert(
     && socialPreviewPng.readUInt32BE(20) === 630,
   "The social preview PNG must be exactly 1200 × 630.",
 );
-assert(robots === "User-agent: *\nAllow: /\n", "robots.txt must have a stable allow payload.");
+assertRobotsTxt(robots, { basePath: PROJECT_PATH, sitemapUrl: SITEMAP_URL });
+assertSitemapXml(sitemap, { pageUrl: PAGE_URL });
+assertSecurityTxt(security, {
+  canonicalUrl: SECURITY_URL,
+  contactUrl: SECURITY_CONTACT_URL,
+  policyUrl: SECURITY_POLICY_URL,
+});
 
 for (const token of [
   "::selection",
@@ -406,6 +430,7 @@ for (const token of [
   "actions/upload-pages-artifact@",
   "actions/deploy-pages@",
   "path: site",
+  "include-hidden-files: true",
   "name: github-pages",
 ]) {
   assert(workflows.get("pages.yml").includes(token), `pages.yml is missing ${token}`);
