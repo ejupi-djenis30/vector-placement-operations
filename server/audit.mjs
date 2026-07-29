@@ -25,6 +25,8 @@ const ALLOWED_KEYS = new Set([
   "previousFingerprint",
   "oldId",
   "newId",
+  "programmeRequirement",
+  "placeholderFilled",
 ]);
 
 function safeValue(value) {

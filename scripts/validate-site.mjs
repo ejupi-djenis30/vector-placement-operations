@@ -128,6 +128,9 @@ for (const token of [
   'name="twitter:card" content="summary_large_image"',
   'data-workspace-link',
   'href="app/"',
+  'Plan cohort coverage',
+  'docker compose run --rm --no-deps vector',
+  'remove bootstrap secret · docker compose up -d',
 ]) {
   assert(marketingHtml.includes(token), `site/index.html is missing ${token}`);
 }
@@ -168,6 +171,7 @@ for (const token of [
   "::selection",
   ":focus-visible",
   ".skip-link",
+  ".coverage-table",
   "@media (max-width:",
   "@media (prefers-reduced-motion: reduce)",
 ]) {
@@ -183,6 +187,8 @@ for (const [name, source] of [
 }
 assert(workspaceApp.includes('credentials: "same-origin"'), "Workspace requests must be same-origin.");
 assert(workspaceApp.includes('"X-CSRF-Token"'), "Workspace mutations must send a CSRF token.");
+assert(workspaceApp.includes("loadCoverage"), "Workspace cohort coverage is missing.");
+assert(workspaceApp.includes("canViewCoverage"), "Coverage scope guard is missing.");
 
 const repositoryFiles = await listFiles(repositoryRoot);
 for (const file of repositoryFiles) {
@@ -279,6 +285,8 @@ assert(
   routes.includes('app.get("/api/import/:resource/template"'),
   "The API must expose stable CSV templates.",
 );
+assert(routes.includes('app.get("/api/coverage"'), "The coverage API route is missing.");
+assert(schemas.includes("CoverageResponse"), "The coverage response contract is missing.");
 assert(
   !routes.includes('app.delete("/api/students/:id"'),
   "Individual student erasure must not bypass governed retention.",
@@ -308,6 +316,8 @@ for (const token of [
   "`hasMore`",
   "`cleanupPending: true`",
   "db:compact -- --confirm-maintenance",
+  "cohort coverage board",
+  "inactivity session limits",
   "reverse-proxy access logs to omit the entire query string",
 ]) {
   assert(privacyAndRetention.includes(token), `Retention runbook is missing ${token}`);
@@ -317,7 +327,7 @@ for (const token of [
   "GET /api/import/hosts/template",
   "GET /api/import/placements/template",
   "externalRef,firstName,lastName,email,cohortName,cohortAcademicYear",
-  "studentExternalRef,hostName,periodName,schoolTutorEmail",
+  "studentExternalRef,hostName,programmeCode,periodName,schoolTutorEmail",
   "not VECTOR's internal UUIDs",
   "10,000",
   "`422 export_row_limit`",
@@ -358,6 +368,14 @@ for (const token of [
   "`428 precondition_required`",
   "omit the entire query string",
   "`request.path`",
+  "`VECTOR_DEFAULT`",
+  "`VECTOR_SESSION_IDLE_MINUTES`",
+  "Server-enforced inactivity timeout",
+  "Cohort coverage planning",
+  "VECTOR 3.3 adds no database migration",
+  "manually added documents",
+  "up to 200 programmes",
+  "up to 100 published versions",
 ]) {
   assert(selfHosting.includes(token), `Self-hosting runbook is missing ${token}`);
 }

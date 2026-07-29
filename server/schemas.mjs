@@ -20,6 +20,46 @@ export const documentKind = z.enum([
   "completion_certificate",
   "other",
 ]);
+export const programmeCode = z.string()
+  .trim()
+  .min(2)
+  .max(40)
+  .regex(/^[A-Z][A-Z0-9_]*$/);
+export const requirementCode = z.string()
+  .trim()
+  .min(2)
+  .max(40)
+  .regex(/^[a-z][a-z0-9_]*$/);
+const acceptedDocumentStatus = z.enum(["draft", "ready", "signed", "archived"]);
+const ProgrammeRequirementBody = z.strictObject({
+  code: requirementCode,
+  label: z.string().trim().min(1).max(160),
+  acceptedStatuses: z.array(acceptedDocumentStatus).min(1).max(4),
+});
+const ProgrammeVersionBody = z.strictObject({
+  defaultTargetHours: z.number().positive().max(2000),
+  minimumCheckIns: z.number().int().min(0).max(100),
+  requirements: z.array(ProgrammeRequirementBody).max(30),
+}).superRefine((value, context) => {
+  const codes = new Set();
+  value.requirements.forEach((requirement, index) => {
+    if (codes.has(requirement.code)) {
+      context.addIssue({
+        code: "custom",
+        path: ["requirements", index, "code"],
+        message: "Requirement codes must be unique within a programme version.",
+      });
+    }
+    codes.add(requirement.code);
+    if (new Set(requirement.acceptedStatuses).size !== requirement.acceptedStatuses.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["requirements", index, "acceptedStatuses"],
+        message: "Accepted statuses must not contain duplicates.",
+      });
+    }
+  });
+});
 
 export function parseInput(schema, value) {
   const parsed = schema.safeParse(value);
@@ -92,6 +132,42 @@ export const SessionResponse = z.object({
   expiresAt: timestamp.nullable(),
 });
 
+export const attentionCategory = z.enum([
+  "evidence",
+  "hours",
+  "status",
+  "assignment",
+]);
+export const attentionReason = z.enum([
+  "document_due",
+  "hours_pending",
+  "placement_start",
+  "placement_end",
+  "placement_review",
+  "tutor_unassigned",
+]);
+export const attentionSeverity = z.enum(["overdue", "due_soon", "review"]);
+export const AttentionItemResponse = z.object({
+  id,
+  placementId: id,
+  category: attentionCategory,
+  reason: attentionReason,
+  severity: attentionSeverity,
+  title: z.string().max(200),
+  detail: z.string().max(500),
+  dueDate: isoDate.nullable(),
+  studentName: z.string().max(250),
+  hostName: z.string().max(200),
+  schoolTutorName: z.string().max(120),
+});
+const AttentionSummaryResponse = z.object({
+  total: z.number().int().nonnegative(),
+  overdue: z.number().int().nonnegative(),
+  dueSoon: z.number().int().nonnegative(),
+  review: z.number().int().nonnegative(),
+  items: z.array(AttentionItemResponse).max(6),
+});
+
 export const DashboardResponse = z.object({
   placements: z.number().int().nonnegative(),
   active: z.number().int().nonnegative(),
@@ -99,7 +175,8 @@ export const DashboardResponse = z.object({
   complete: z.number().int().nonnegative(),
   completion: z.number().int().min(0).max(100),
   documentGaps: z.number().int().nonnegative(),
-});
+  attention: AttentionSummaryResponse,
+});;
 
 export const PlacementResponse = z.object({
   id,
@@ -111,6 +188,10 @@ export const PlacementResponse = z.object({
   periodId: id.nullable(),
   schoolTutorId: id.nullable(),
   schoolTutorName: z.string().max(120),
+  programmeVersionId: id,
+  programmeCode,
+  programmeName: z.string().max(160),
+  programmeVersion: z.number().int().positive(),
   hostTutorName: z.string().max(120),
   startDate: isoDate,
   endDate: isoDate,
@@ -157,6 +238,9 @@ export const DocumentResponse = z.object({
   superseded: z.boolean(),
   supersededById: id.nullable(),
   supersedeReasonCode: z.string().max(80).nullable(),
+  requirementId: id.nullable(),
+  requirementCode: requirementCode.nullable(),
+  requirementLabel: z.string().max(160).nullable(),
   canEdit: z.boolean(),
   canArchive: z.boolean(),
   canSupersede: z.boolean(),
@@ -186,6 +270,11 @@ export const PlacementDetailResponse = PlacementResponse.extend({
     fingerprint: z.string().length(64).regex(/^[0-9a-f]+$/),
     verifiedHours: z.number().nonnegative(),
     targetHours: z.number().positive(),
+    completedCheckIns: z.number().int().nonnegative(),
+    minimumCheckIns: z.number().int().nonnegative(),
+    programmeCode,
+    programmeName: z.string().max(160),
+    programmeVersion: z.number().int().positive(),
   }),
 });
 
@@ -242,6 +331,41 @@ export const PlacementListResponse = z.object({
   items: z.array(PlacementResponse).max(100),
   nextCursor: PageCursor,
 });
+export const AttentionResponse = z.object({
+  items: z.array(AttentionItemResponse).max(100),
+  nextCursor: PageCursor,
+});
+const coverageStatus = z.enum(["unplaced", "placed", "conflict"]);
+const CoveragePlacementResponse = z.object({
+  id,
+  hostName: z.string().max(200),
+  status: placementStatus,
+  startDate: isoDate,
+  endDate: isoDate,
+});
+const CoverageItemResponse = z.object({
+  studentId: id,
+  studentName: z.string().max(250),
+  externalRef: z.string().max(160).nullable(),
+  cohortId: id,
+  cohortName: z.string().max(160),
+  status: coverageStatus,
+  placementCount: z.number().int().nonnegative(),
+  placements: z.array(CoveragePlacementResponse).max(5),
+  additionalPlacements: z.number().int().nonnegative(),
+});
+const CoverageSummaryResponse = z.object({
+  total: z.number().int().nonnegative(),
+  unplaced: z.number().int().nonnegative(),
+  placed: z.number().int().nonnegative(),
+  conflict: z.number().int().nonnegative(),
+});
+export const CoverageResponse = z.object({
+  summary: CoverageSummaryResponse,
+  items: z.array(CoverageItemResponse).max(100),
+  nextCursor: PageCursor,
+});
+
 export const StudentListResponse = z.object({
   items: z.array(StudentResponse).max(100),
   nextCursor: PageCursor,
@@ -293,6 +417,42 @@ export const UsersResponse = z.object({
   })),
 });
 
+export const ProgrammeRequirementResponse = z.object({
+  id,
+  code: requirementCode,
+  label: z.string().max(160),
+  acceptedStatuses: z.array(acceptedDocumentStatus).min(1).max(4),
+  sortOrder: z.number().int().min(0).max(1000),
+});
+export const ProgrammeVersionResponse = z.object({
+  id,
+  version: z.number().int().positive(),
+  defaultTargetHours: z.number().positive().max(2000),
+  minimumCheckIns: z.number().int().min(0).max(100),
+  publishedAt: timestamp,
+  requirements: z.array(ProgrammeRequirementResponse).max(30),
+});
+export const ProgrammeResponse = z.object({
+  id,
+  code: programmeCode,
+  name: z.string().max(160),
+  description: z.string().max(1000),
+  active: z.boolean(),
+  revision: z.number().int().positive(),
+  currentVersion: ProgrammeVersionResponse,
+});
+export const ProgrammesResponse = z.object({
+  items: z.array(ProgrammeResponse).max(200),
+});
+export const ProgrammeVersionsResponse = z.object({
+  items: z.array(ProgrammeVersionResponse).max(100),
+});
+export const ProgrammePublishResponse = z.object({
+  id,
+  version: z.number().int().positive(),
+  revision: z.number().int().positive(),
+});
+
 export const LoginBody = z.strictObject({
   email,
   password: z.string().min(1).max(256),
@@ -305,6 +465,21 @@ export const PlacementQuery = z.strictObject({
   query: z.string().max(120).default(""),
   status: z.enum(["all", "planned", "active", "review", "complete", "cancelled"]).default("all"),
 });
+export const AttentionQuery = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: CollectionCursor.optional(),
+  query: z.string().max(120).default(""),
+  category: z.enum(["all", "evidence", "hours", "status", "assignment"]).default("all"),
+});
+export const CoverageQuery = z.strictObject({
+  cohortId: id,
+  periodId: id,
+  status: z.enum(["all", "unplaced", "placed", "conflict"]).default("all"),
+  query: z.string().max(120).default(""),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: CollectionCursor.optional(),
+});
+
 export const CollectionQuery = z.strictObject({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: CollectionCursor.optional(),
@@ -418,6 +593,7 @@ export const PlacementBody = z.strictObject({
   hostId: id,
   periodId: nullableId,
   schoolTutorId: nullableId,
+  programmeVersionId: id.optional(),
   hostTutorName: z.string().max(120).optional(),
   hostTutorEmail: emptyEmail.optional(),
   startDate: isoDate,
@@ -432,6 +608,7 @@ export const PlacementPatchBody = z.strictObject({
   hostId: id.optional(),
   periodId: nullableId,
   schoolTutorId: nullableId,
+  programmeVersionId: id.optional(),
   hostTutorName: z.string().max(120).optional(),
   hostTutorEmail: emptyEmail.optional(),
   status: placementStatus.optional(),
@@ -483,6 +660,22 @@ export const DocumentBody = z.strictObject({
   status: documentStatus,
   reference: z.string().max(500).optional(),
   dueDate: isoDate.nullable().optional(),
+});
+export const ProgrammeCreateBody = ProgrammeVersionBody.extend({
+  code: programmeCode,
+  name: z.string().trim().min(1).max(160),
+  description: z.string().max(1000).optional(),
+});
+export const ProgrammePatchBody = z.strictObject({
+  revision: z.number().int().positive(),
+  name: z.string().trim().min(1).max(160).optional(),
+  description: z.string().max(1000).optional(),
+  active: z.boolean().optional(),
+}).refine((value) => Object.keys(value).length > 1, {
+  message: "At least one field must change.",
+});
+export const ProgrammePublishBody = ProgrammeVersionBody.extend({
+  revision: z.number().int().positive(),
 });
 export const BrandingBody = z.strictObject({
   revision: z.number().int().positive(),

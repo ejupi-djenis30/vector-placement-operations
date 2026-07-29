@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { afterEach, test } from "node:test";
+import {
+  deleteExpiredSessions,
+  readSession,
+  touchSession,
+} from "../server/auth.mjs";
 import { ADMIN_PASSWORD, startTestApp } from "../test-support/server-test-helper.mjs";
 
 const running = new Set();
@@ -750,7 +755,7 @@ test("a placement can close only after verified hours, a check-in and required e
       method: "POST",
       body: { kind: document[0], title: document[1], status: document[2] },
     });
-    assert.equal(result.response.status, 201);
+    assert.equal(result.response.status, 200);
     documentIds.push(result.payload.id);
   }
 
@@ -1231,4 +1236,267 @@ test("retention deletes deterministic approved batches while preserving held rec
     body: { confirm: "ERASE STUDENT" },
   });
   assert.equal(individualErase.response.status, 404);
+});
+
+test("expired-session cleanup applies absolute and exact inactivity boundaries", async () => {
+  const instance = await app();
+  const clients = [instance.client, instance.newClient(), instance.newClient()];
+  for (const client of clients) {
+    const login = await client.login();
+    assert.equal(login.response.status, 200);
+  }
+
+  const sessions = instance.db.prepare("SELECT id FROM sessions ORDER BY id").all();
+  assert.equal(sessions.length, 3);
+  const now = new Date();
+  const idleCutoff = new Date(now.getTime() - 45 * 60_000);
+  const future = new Date(now.getTime() + 60 * 60_000);
+  const updateSession = instance.db.prepare(`
+    UPDATE sessions
+    SET expires_at = ?, last_seen_at = ?
+    WHERE id = ?
+  `);
+  updateSession.run(
+    now.toISOString(),
+    future.toISOString(),
+    sessions[0].id,
+  );
+  updateSession.run(
+    future.toISOString(),
+    idleCutoff.toISOString(),
+    sessions[1].id,
+  );
+  updateSession.run(
+    future.toISOString(),
+    new Date(idleCutoff.getTime() + 1).toISOString(),
+    sessions[2].id,
+  );
+
+  assert.equal(deleteExpiredSessions(instance.db, 45, now), 2);
+  assert.deepEqual(
+    instance.db.prepare("SELECT id FROM sessions ORDER BY id").all(),
+    [{ id: sessions[2].id }],
+  );
+});
+
+test("session activity updates remain monotonic for out-of-order requests", async () => {
+  const instance = await app();
+  const login = await instance.client.login();
+  assert.equal(login.response.status, 200);
+  const token = decodeURIComponent(instance.client.cookie.split("=", 2)[1]);
+  const session = instance.db.prepare("SELECT id FROM sessions").get();
+  const firstRequest = new Date();
+  const laterRequest = new Date(firstRequest.getTime() + 5 * 60_000);
+  const absoluteExpiry = new Date(firstRequest.getTime() + 60 * 60_000);
+  const initialLastSeen = new Date(firstRequest.getTime() - 60_000).toISOString();
+  instance.db.prepare(`
+    UPDATE sessions
+    SET expires_at = ?, last_seen_at = ?
+    WHERE id = ?
+  `).run(
+    absoluteExpiry.toISOString(),
+    initialLastSeen,
+    session.id,
+  );
+
+  const readLastSeen = instance.db.prepare(
+    "SELECT last_seen_at FROM sessions WHERE id = ?",
+  );
+  assert.ok(readSession(instance.db, token, 45, laterRequest));
+  assert.equal(readLastSeen.get(session.id).last_seen_at, initialLastSeen);
+
+  assert.equal(touchSession(instance.db, session.id, laterRequest, laterRequest), 1);
+  assert.equal(readLastSeen.get(session.id).last_seen_at, laterRequest.toISOString());
+  assert.ok(readSession(instance.db, token, 45, firstRequest));
+  assert.equal(readLastSeen.get(session.id).last_seen_at, laterRequest.toISOString());
+  assert.equal(touchSession(instance.db, session.id, firstRequest, firstRequest), 1);
+  assert.equal(readLastSeen.get(session.id).last_seen_at, laterRequest.toISOString());
+
+  instance.db.prepare(`
+    UPDATE sessions
+    SET expires_at = ?, last_seen_at = ?
+    WHERE id = ?
+  `).run(firstRequest.toISOString(), initialLastSeen, session.id);
+  assert.equal(touchSession(instance.db, session.id, laterRequest, laterRequest), 0);
+  assert.equal(readLastSeen.get(session.id).last_seen_at, initialLastSeen);
+});
+
+test("only successful authenticated same-origin requests renew inactivity", async () => {
+  const instance = await app();
+  const login = await instance.client.login();
+  assert.equal(login.response.status, 200);
+  const session = instance.db.prepare("SELECT id FROM sessions").get();
+  const resetLastSeen = () => {
+    const value = new Date(Date.now() - 60_000).toISOString();
+    instance.db.prepare(`
+      UPDATE sessions
+      SET expires_at = ?, last_seen_at = ?
+      WHERE id = ?
+    `).run(
+      new Date(Date.now() + 60 * 60_000).toISOString(),
+      value,
+      session.id,
+    );
+    return value;
+  };
+  const readLastSeen = () => instance.db.prepare(
+    "SELECT last_seen_at FROM sessions WHERE id = ?",
+  ).get(session.id).last_seen_at;
+  const retentionBody = { beforeDate: "2025-01-01", dryRun: true, confirm: "" };
+
+  for (const path of [
+    "/api/health/live",
+    "/api/public/branding",
+    "/api/session",
+  ]) {
+    const before = resetLastSeen();
+    const result = await instance.client.request(path, {
+      headers: { "sec-fetch-site": "same-origin" },
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(readLastSeen(), before);
+  }
+
+  let before = resetLastSeen();
+  const unsignedGet = await instance.client.request("/api/dashboard");
+  assert.equal(unsignedGet.response.status, 200);
+  assert.equal(readLastSeen(), before);
+
+  before = resetLastSeen();
+  const missing = await instance.client.request("/api/not-a-route", {
+    headers: { "sec-fetch-site": "same-origin" },
+  });
+  assert.equal(missing.response.status, 404);
+  assert.equal(readLastSeen(), before);
+
+  before = resetLastSeen();
+  const invalidOrigin = await instance.client.request("/api/maintenance/retention", {
+    method: "POST",
+    body: retentionBody,
+    headers: { origin: "https://attacker.example" },
+  });
+  assert.equal(invalidOrigin.response.status, 403);
+  assert.equal(invalidOrigin.payload.error.code, "invalid_origin");
+  assert.equal(readLastSeen(), before);
+
+  before = resetLastSeen();
+  const invalidCsrf = await instance.client.request("/api/maintenance/retention", {
+    method: "POST",
+    body: retentionBody,
+    includeCsrf: false,
+  });
+  assert.equal(invalidCsrf.response.status, 403);
+  assert.equal(invalidCsrf.payload.error.code, "invalid_csrf");
+  assert.equal(readLastSeen(), before);
+
+  before = resetLastSeen();
+  const fetchMetadataGet = await instance.client.request("/api/dashboard", {
+    headers: { "sec-fetch-site": "same-origin" },
+  });
+  assert.equal(fetchMetadataGet.response.status, 200);
+  assert.ok(readLastSeen() > before);
+
+  before = resetLastSeen();
+  const originGet = await instance.client.request("/api/dashboard", {
+    headers: { origin: instance.config.origin },
+  });
+  assert.equal(originGet.response.status, 200);
+  assert.ok(readLastSeen() > before);
+
+  before = resetLastSeen();
+  const mutation = await instance.client.request("/api/maintenance/retention", {
+    method: "POST",
+    body: retentionBody,
+  });
+  assert.equal(mutation.response.status, 200);
+  assert.ok(readLastSeen() > before);
+});
+
+test("direct re-login replaces an idle-expired cookie once", async () => {
+  const instance = await app();
+  const initialLogin = await instance.client.login();
+  assert.equal(initialLogin.response.status, 200);
+  const oldCookie = instance.client.cookie;
+  const now = new Date();
+  instance.db.prepare(`
+    UPDATE sessions
+    SET expires_at = ?, last_seen_at = ?
+  `).run(
+    new Date(now.getTime() + 60 * 60_000).toISOString(),
+    new Date(now.getTime() - 46 * 60_000).toISOString(),
+  );
+
+  const replacement = await instance.client.login();
+  assert.equal(replacement.response.status, 200);
+  const setCookie = replacement.response.headers.get("set-cookie");
+  assert.equal(setCookie.match(/vector_session=/g).length, 1);
+  assert.doesNotMatch(setCookie, /^vector_session=;/);
+  assert.notEqual(instance.client.cookie, oldCookie);
+  assert.equal(instance.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 1);
+
+  const dashboard = await instance.client.request("/api/dashboard", {
+    headers: { "sec-fetch-site": "same-origin" },
+  });
+  assert.equal(dashboard.response.status, 200);
+});
+
+
+test("failed login clears an idle-expired cookie", async () => {
+  const instance = await app();
+  const initialLogin = await instance.client.login();
+  assert.equal(initialLogin.response.status, 200);
+  const now = new Date();
+  instance.db.prepare(`
+    UPDATE sessions
+    SET expires_at = ?, last_seen_at = ?
+  `).run(
+    new Date(now.getTime() + 60 * 60_000).toISOString(),
+    new Date(now.getTime() - 46 * 60_000).toISOString(),
+  );
+
+  const failed = await instance.client.login(
+    "admin@example.test",
+    "wrong-password-that-must-not-authenticate",
+  );
+  assert.equal(failed.response.status, 401);
+  assert.match(failed.response.headers.get("set-cookie"), /^vector_session=;/);
+  assert.equal(instance.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
+});
+
+test("idle and absolute expiry remove the database session and browser cookie", async () => {
+  const instance = await app();
+  const initialLogin = await instance.client.login();
+  assert.equal(initialLogin.response.status, 200);
+  const now = new Date();
+  instance.db.prepare(`
+    UPDATE sessions
+    SET expires_at = ?, last_seen_at = ?
+  `).run(
+    new Date(now.getTime() + 60 * 60_000).toISOString(),
+    new Date(now.getTime() - 46 * 60_000).toISOString(),
+  );
+
+  const idleExpired = await instance.client.request("/api/dashboard");
+  assert.equal(idleExpired.response.status, 401);
+  assert.equal(idleExpired.payload.error.code, "authentication_required");
+  assert.match(idleExpired.response.headers.get("set-cookie"), /^vector_session=;/);
+  assert.equal(instance.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
+
+  const replacementLogin = await instance.client.login();
+  assert.equal(replacementLogin.response.status, 200);
+  const activeDashboard = await instance.client.request("/api/dashboard");
+  assert.equal(activeDashboard.response.status, 200);
+
+  const absoluteNow = new Date();
+  instance.db.prepare(`
+    UPDATE sessions
+    SET expires_at = ?, last_seen_at = ?
+  `).run(
+    new Date(absoluteNow.getTime() - 1).toISOString(),
+    new Date(absoluteNow.getTime() + 60 * 60_000).toISOString(),
+  );
+  const absoluteExpired = await instance.client.request("/api/dashboard");
+  assert.equal(absoluteExpired.response.status, 401);
+  assert.match(absoluteExpired.response.headers.get("set-cookie"), /^vector_session=;/);
+  assert.equal(instance.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
 });

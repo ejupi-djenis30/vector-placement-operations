@@ -9,7 +9,18 @@ import {
   isIsoDate,
   minutesToHours,
 } from "./validation.mjs";
-import { assertNotFutureSchoolDate, schoolDateForInstant } from "./school-time.mjs";
+import {
+  assertNotFutureSchoolDate,
+  currentSchoolDate,
+  schoolDateForInstant,
+} from "./school-time.mjs";
+import {
+  assertPlacementProgrammeMutable,
+  currentProgrammeVersionByCode,
+  programmeVersionForSchool,
+  replacePlacementRequirements,
+  seedPlacementRequirements,
+} from "./programmes.mjs";
 
 const STATUS_TRANSITIONS = Object.freeze({
   planned: new Set(["active", "cancelled"]),
@@ -30,27 +41,19 @@ const TERMINAL_PLACEMENT_STATUSES = Object.freeze(["complete", "cancelled"]);
 
 function documentGapsExpression(alias = "p") {
   return `(
-    CASE WHEN EXISTS (
-      SELECT 1 FROM placement_documents pd
-      WHERE pd.placement_id = ${alias}.id
-        AND pd.kind = 'training_agreement'
-        AND pd.superseded_at IS NULL
-        AND pd.status IN ('signed', 'archived')
-    ) THEN 0 ELSE 1 END
-    + CASE WHEN EXISTS (
-      SELECT 1 FROM placement_documents pd
-      WHERE pd.placement_id = ${alias}.id
-        AND pd.kind = 'attendance_log'
-        AND pd.superseded_at IS NULL
-        AND pd.status IN ('signed', 'archived')
-    ) THEN 0 ELSE 1 END
-    + CASE WHEN EXISTS (
-      SELECT 1 FROM placement_documents pd
-      WHERE pd.placement_id = ${alias}.id
-        AND pd.kind = 'evaluation'
-        AND pd.superseded_at IS NULL
-        AND pd.status IN ('ready', 'signed', 'archived')
-    ) THEN 0 ELSE 1 END
+    SELECT COUNT(*)
+    FROM programme_requirements pr
+    WHERE pr.programme_version_id = ${alias}.programme_version_id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM placement_documents pd
+        WHERE pd.placement_id = ${alias}.id
+          AND pd.requirement_id = pr.id
+          AND pd.superseded_at IS NULL
+          AND pd.status IN (
+            SELECT value FROM json_each(pr.accepted_statuses_json)
+          )
+      )
   )`;
 }
 
@@ -159,8 +162,18 @@ function placementChildCounts(db, placementId) {
       (SELECT COUNT(*) FROM check_ins WHERE placement_id = @placementId) AS checkIns,
       (
         SELECT COUNT(*)
-        FROM placement_documents
-        WHERE placement_id = @placementId
+        FROM placement_documents pd
+        LEFT JOIN programme_requirements pr ON pr.id = pd.requirement_id
+        WHERE pd.placement_id = @placementId
+          AND NOT (
+            pd.requirement_id IS NOT NULL
+            AND pd.title = pr.label
+            AND pd.status = 'missing'
+            AND pd.reference = ''
+            AND pd.due_date IS NULL
+            AND pd.revision = 1
+            AND pd.superseded_at IS NULL
+          )
       ) AS documents
   `).get({ placementId });
 }
@@ -326,6 +339,10 @@ function mapPlacement(row) {
     periodId: row.period_id,
     schoolTutorId: row.school_tutor_id,
     schoolTutorName: row.school_tutor_name ?? "Unassigned",
+    programmeVersionId: row.programme_version_id,
+    programmeCode: row.programme_code,
+    programmeName: row.programme_name,
+    programmeVersion: row.programme_version,
     hostTutorName: row.host_tutor_name,
     startDate: row.start_date,
     endDate: row.end_date,
@@ -338,7 +355,648 @@ function mapPlacement(row) {
   };
 }
 
-export function readDashboard(db, user) {
+const ATTENTION_CURSOR_TYPES = Object.freeze(["number", "string", "string", "string"]);
+const COVERAGE_CURSOR_TYPES = Object.freeze(["number", "string", "string", "string"]);
+
+function attentionCte(user) {
+  const scope = placementScope(user);
+  return `
+    WITH attention AS (
+      SELECT
+        'evidence_' || pd.id AS id,
+        p.id AS placement_id,
+        'evidence' AS category,
+        'document_due' AS reason,
+        CASE WHEN pd.due_date < @today THEN 'overdue' ELSE 'due_soon' END AS severity,
+        pd.title AS title,
+        'Document status: ' || replace(pd.status, '_', ' ') || '.' AS detail,
+        pd.due_date AS due_date,
+        s.first_name || ' ' || s.last_name AS student_name,
+        h.name AS host_name,
+        COALESCE(u.display_name, '') AS school_tutor_name,
+        CASE WHEN pd.due_date < @today THEN 0 ELSE 1 END AS priority,
+        pd.due_date AS sort_date,
+        s.id AS student_id
+      FROM placements p
+      JOIN students s ON s.id = p.student_id
+      JOIN hosts h ON h.id = p.host_id
+      LEFT JOIN users u ON u.id = p.school_tutor_id
+      JOIN placement_documents pd ON pd.placement_id = p.id
+      LEFT JOIN programme_requirements pr ON pr.id = pd.requirement_id
+      WHERE ${scope}
+        AND p.status NOT IN ('complete', 'cancelled')
+        AND pd.superseded_at IS NULL
+        AND pd.due_date IS NOT NULL
+        AND pd.due_date <= date(@today, '+14 days')
+        AND (
+          (
+            pd.requirement_id IS NULL
+            AND pd.status NOT IN ('signed', 'archived')
+          )
+          OR (
+            pd.requirement_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM json_each(pr.accepted_statuses_json)
+              WHERE value = pd.status
+            )
+          )
+        )
+
+      UNION ALL
+
+      SELECT
+        'hours_' || p.id AS id,
+        p.id AS placement_id,
+        'hours' AS category,
+        'hours_pending' AS reason,
+        'review' AS severity,
+        'Time entries need review' AS title,
+        CAST(COUNT(*) AS TEXT) || ' pending time '
+          || CASE WHEN COUNT(*) = 1 THEN 'entry needs' ELSE 'entries need' END
+          || ' review.' AS detail,
+        NULL AS due_date,
+        s.first_name || ' ' || s.last_name AS student_name,
+        h.name AS host_name,
+        COALESCE(u.display_name, '') AS school_tutor_name,
+        2 AS priority,
+        MIN(te.entry_date) AS sort_date,
+        s.id AS student_id
+      FROM placements p
+      JOIN students s ON s.id = p.student_id
+      JOIN hosts h ON h.id = p.host_id
+      LEFT JOIN users u ON u.id = p.school_tutor_id
+      JOIN time_entries te ON te.placement_id = p.id
+      WHERE ${scope}
+        AND p.status NOT IN ('complete', 'cancelled')
+        AND te.verification_status = 'pending'
+      GROUP BY
+        p.id,
+        s.id,
+        s.first_name,
+        s.last_name,
+        h.name,
+        u.display_name
+
+      UNION ALL
+
+      SELECT
+        'status_start_' || p.id AS id,
+        p.id AS placement_id,
+        'status' AS category,
+        'placement_start' AS reason,
+        CASE WHEN p.start_date < @today THEN 'overdue' ELSE 'due_soon' END AS severity,
+        CASE
+          WHEN p.start_date < @today THEN 'Placement start date has passed'
+          ELSE 'Placement starts soon'
+        END AS title,
+        CASE
+          WHEN p.start_date < @today THEN 'Start the placement, reschedule it or record a cancellation.'
+          ELSE 'Confirm the placement is ready to start.'
+        END AS detail,
+        p.start_date AS due_date,
+        s.first_name || ' ' || s.last_name AS student_name,
+        h.name AS host_name,
+        COALESCE(u.display_name, '') AS school_tutor_name,
+        CASE WHEN p.start_date < @today THEN 0 ELSE 1 END AS priority,
+        p.start_date AS sort_date,
+        s.id AS student_id
+      FROM placements p
+      JOIN students s ON s.id = p.student_id
+      JOIN hosts h ON h.id = p.host_id
+      LEFT JOIN users u ON u.id = p.school_tutor_id
+      WHERE ${scope}
+        AND p.status = 'planned'
+        AND p.start_date <= date(@today, '+14 days')
+
+      UNION ALL
+
+      SELECT
+        'status_end_' || p.id AS id,
+        p.id AS placement_id,
+        'status' AS category,
+        'placement_end' AS reason,
+        CASE WHEN p.end_date < @today THEN 'overdue' ELSE 'due_soon' END AS severity,
+        CASE
+          WHEN p.end_date < @today THEN 'Placement end date has passed'
+          ELSE 'Placement ends soon'
+        END AS title,
+        CASE
+          WHEN p.end_date < @today THEN 'Move the placement to review or correct its dates.'
+          ELSE 'Prepare the placement for close-out.'
+        END AS detail,
+        p.end_date AS due_date,
+        s.first_name || ' ' || s.last_name AS student_name,
+        h.name AS host_name,
+        COALESCE(u.display_name, '') AS school_tutor_name,
+        CASE WHEN p.end_date < @today THEN 0 ELSE 1 END AS priority,
+        p.end_date AS sort_date,
+        s.id AS student_id
+      FROM placements p
+      JOIN students s ON s.id = p.student_id
+      JOIN hosts h ON h.id = p.host_id
+      LEFT JOIN users u ON u.id = p.school_tutor_id
+      WHERE ${scope}
+        AND p.status = 'active'
+        AND p.end_date <= date(@today, '+14 days')
+
+      UNION ALL
+
+      SELECT
+        'status_review_' || p.id AS id,
+        p.id AS placement_id,
+        'status' AS category,
+        'placement_review' AS reason,
+        'review' AS severity,
+        'Placement awaits close-out' AS title,
+        'Review readiness and decide whether to complete the placement.' AS detail,
+        NULL AS due_date,
+        s.first_name || ' ' || s.last_name AS student_name,
+        h.name AS host_name,
+        COALESCE(u.display_name, '') AS school_tutor_name,
+        2 AS priority,
+        p.end_date AS sort_date,
+        s.id AS student_id
+      FROM placements p
+      JOIN students s ON s.id = p.student_id
+      JOIN hosts h ON h.id = p.host_id
+      LEFT JOIN users u ON u.id = p.school_tutor_id
+      WHERE ${scope}
+        AND p.status = 'review'
+
+      UNION ALL
+
+      SELECT
+        'assignment_' || p.id AS id,
+        p.id AS placement_id,
+        'assignment' AS category,
+        'tutor_unassigned' AS reason,
+        CASE WHEN p.start_date < @today THEN 'overdue' ELSE 'due_soon' END AS severity,
+        CASE
+          WHEN p.start_date < @today THEN 'School tutor assignment is overdue'
+          ELSE 'School tutor not assigned'
+        END AS title,
+        'Assign a school tutor to own follow-up for this placement.' AS detail,
+        p.start_date AS due_date,
+        s.first_name || ' ' || s.last_name AS student_name,
+        h.name AS host_name,
+        '' AS school_tutor_name,
+        CASE WHEN p.start_date < @today THEN 0 ELSE 1 END AS priority,
+        p.start_date AS sort_date,
+        s.id AS student_id
+      FROM placements p
+      JOIN students s ON s.id = p.student_id
+      JOIN hosts h ON h.id = p.host_id
+      WHERE ${scope}
+        AND p.status IN ('planned', 'active')
+        AND p.school_tutor_id IS NULL
+        AND p.start_date <= date(@today, '+14 days')
+    ),
+    filtered_attention AS (
+      SELECT *
+      FROM attention
+      WHERE (@category = 'all' OR category = @category)
+        AND (
+          @query = '%%'
+          OR student_name LIKE @query ESCAPE '\\'
+          OR host_name LIKE @query ESCAPE '\\'
+          OR school_tutor_name LIKE @query ESCAPE '\\'
+          OR title LIKE @query ESCAPE '\\'
+        )
+    )
+  `;
+}
+
+function attentionQueryParams(user, { today, query = "", category = "all" }) {
+  return {
+    ...params(user),
+    today,
+    query: searchPattern(query),
+    category,
+  };
+}
+
+function mapAttentionRow(row) {
+  return {
+    id: row.id,
+    placementId: row.placementId,
+    category: row.category,
+    reason: row.reason,
+    severity: row.severity,
+    title: row.title,
+    detail: row.detail,
+    dueDate: row.dueDate,
+    studentName: row.studentName,
+    hostName: row.hostName,
+    schoolTutorName: row.schoolTutorName,
+  };
+}
+
+function selectAttentionRows(db, user, filters, { position = null, limit }) {
+  return db.prepare(`${attentionCte(user)}
+    SELECT
+      id,
+      placement_id AS placementId,
+      category,
+      reason,
+      severity,
+      title,
+      detail,
+      due_date AS dueDate,
+      student_name AS studentName,
+      host_name AS hostName,
+      school_tutor_name AS schoolTutorName,
+      priority,
+      sort_date AS sortDate,
+      student_id AS studentId
+    FROM filtered_attention
+    WHERE @cursorPriority IS NULL
+      OR priority > @cursorPriority
+      OR (
+        priority = @cursorPriority
+        AND (
+          sort_date > @cursorDate
+          OR (
+            sort_date = @cursorDate
+            AND (
+              student_id > @cursorStudentId
+              OR (student_id = @cursorStudentId AND id > @cursorId)
+            )
+          )
+        )
+      )
+    ORDER BY priority, sort_date, student_id, id
+    LIMIT @rowLimit
+  `).all({
+    ...attentionQueryParams(user, filters),
+    cursorPriority: position?.[0] ?? null,
+    cursorDate: position?.[1] ?? "",
+    cursorStudentId: position?.[2] ?? "",
+    cursorId: position?.[3] ?? "",
+    rowLimit: limit,
+  });
+}
+
+function readAttentionSummary(db, user, today) {
+  const filters = { today, query: "", category: "all" };
+  const counts = db.prepare(`${attentionCte(user)}
+    SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(severity = 'overdue'), 0) AS overdue,
+      COALESCE(SUM(severity = 'due_soon'), 0) AS dueSoon,
+      COALESCE(SUM(severity = 'review'), 0) AS review
+    FROM filtered_attention
+  `).get(attentionQueryParams(user, filters));
+  const items = selectAttentionRows(db, user, filters, { limit: 6 });
+  return {
+    total: counts.total,
+    overdue: counts.overdue,
+    dueSoon: counts.dueSoon,
+    review: counts.review,
+    items: items.map(mapAttentionRow),
+  };
+}
+
+export function listAttentionItems(
+  db,
+  user,
+  {
+    query = "",
+    category = "all",
+    limit = 50,
+    cursor = undefined,
+  } = {},
+  cursorCodec,
+  now = new Date(),
+) {
+  const today = currentSchoolDate(db, user.schoolId, now);
+  const binding = cursorBinding(user, "attention", {
+    query: query.trim(),
+    category,
+    today,
+  });
+  const position = cursorCodec.decode(
+    cursor,
+    "attention",
+    ATTENTION_CURSOR_TYPES,
+    binding,
+  );
+  const rows = selectAttentionRows(
+    db,
+    user,
+    { today, query, category },
+    { position, limit: limit + 1 },
+  );
+  return pageRows(
+    rows,
+    limit,
+    "attention",
+    (row) => [row.priority, row.sortDate, row.studentId, row.id],
+    cursorCodec,
+    binding,
+    mapAttentionRow,
+  );
+}
+
+const COVERAGE_CTE = `
+  WITH eligible_students AS (
+    SELECT
+      s.id AS student_id,
+      s.first_name || ' ' || s.last_name AS student_name,
+      s.external_ref,
+      s.cohort_id,
+      c.name AS cohort_name,
+      LOWER(s.last_name) AS sort_last_name,
+      LOWER(s.first_name) AS sort_first_name
+    FROM students s
+    JOIN cohorts c
+      ON c.id = s.cohort_id
+      AND c.school_id = s.school_id
+    WHERE s.school_id = @schoolId
+      AND s.cohort_id = @cohortId
+      AND s.active = 1
+      AND (
+        @query = '%%'
+        OR s.first_name || ' ' || s.last_name LIKE @query ESCAPE '\\'
+        OR s.last_name || ' ' || s.first_name LIKE @query ESCAPE '\\'
+        OR COALESCE(s.external_ref, '') LIKE @query ESCAPE '\\'
+        OR c.name LIKE @query ESCAPE '\\'
+      )
+  ),
+  counted_placements AS (
+    SELECT
+      p.id,
+      p.student_id,
+      p.start_date,
+      p.end_date
+    FROM placements p
+    JOIN eligible_students student ON student.student_id = p.student_id
+    WHERE p.school_id = @schoolId
+      AND p.status != 'cancelled'
+      AND p.start_date <= @periodEnd
+      AND p.end_date >= @periodStart
+  ),
+  classified_students AS (
+    SELECT
+      student.*,
+      (
+        SELECT COUNT(*)
+        FROM counted_placements placement
+        WHERE placement.student_id = student.student_id
+      ) AS placement_count,
+      EXISTS (
+        SELECT 1
+        FROM counted_placements first_placement
+        JOIN counted_placements second_placement
+          ON second_placement.student_id = first_placement.student_id
+          AND second_placement.id > first_placement.id
+        WHERE first_placement.student_id = student.student_id
+          AND first_placement.start_date <= second_placement.end_date
+          AND second_placement.start_date <= first_placement.end_date
+      ) AS has_conflict
+    FROM eligible_students student
+  ),
+  coverage_rows AS (
+    SELECT
+      classified.*,
+      CASE
+        WHEN has_conflict = 1 THEN 'conflict'
+        WHEN placement_count = 0 THEN 'unplaced'
+        ELSE 'placed'
+      END AS coverage_status,
+      CASE
+        WHEN has_conflict = 1 THEN 0
+        WHEN placement_count = 0 THEN 1
+        ELSE 2
+      END AS sort_status
+    FROM classified_students classified
+  )
+`;
+
+function coverageContext(db, user, cohortId, periodId) {
+  if (!hasSchoolScope(user)) {
+    throw new AppError(403, "forbidden", "You do not have permission to perform this action.");
+  }
+  const context = db.prepare(`
+    SELECT
+      cohort.id AS cohortId,
+      period.id AS periodId,
+      period.start_date AS periodStart,
+      period.end_date AS periodEnd
+    FROM cohorts cohort
+    JOIN placement_periods period
+      ON period.id = @periodId
+      AND period.school_id = @schoolId
+    WHERE cohort.id = @cohortId
+      AND cohort.school_id = @schoolId
+  `).get({
+    schoolId: user.schoolId,
+    cohortId,
+    periodId,
+  });
+  if (!context) {
+    throw new AppError(
+      422,
+      "invalid_reference",
+      "The requested coverage cohort and period are not available.",
+    );
+  }
+  return context;
+}
+
+export function listCoverage(
+  db,
+  user,
+  {
+    cohortId,
+    periodId,
+    status = "all",
+    query = "",
+    limit = 50,
+    cursor,
+  },
+  cursorCodec,
+) {
+  const context = coverageContext(db, user, cohortId, periodId);
+  const normalizedQuery = query.trim();
+  const binding = cursorBinding(user, "coverage", {
+    cohortId,
+    periodId,
+    status,
+    query: normalizedQuery,
+    limit,
+  });
+  const position = cursorCodec.decode(
+    cursor,
+    "coverage",
+    COVERAGE_CURSOR_TYPES,
+    binding,
+  );
+  const queryParams = {
+    ...params(user),
+    cohortId,
+    periodStart: context.periodStart,
+    periodEnd: context.periodEnd,
+    query: searchPattern(normalizedQuery),
+  };
+
+  return db.transaction(() => {
+    const counts = db.prepare(`${COVERAGE_CTE}
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(coverage_status = 'unplaced'), 0) AS unplaced,
+        COALESCE(SUM(coverage_status = 'placed'), 0) AS placed,
+        COALESCE(SUM(coverage_status = 'conflict'), 0) AS conflict
+      FROM coverage_rows
+    `).get(queryParams);
+
+    const rows = db.prepare(`${COVERAGE_CTE}
+      SELECT
+        student_id AS studentId,
+        student_name AS studentName,
+        external_ref AS externalRef,
+        cohort_id AS cohortId,
+        cohort_name AS cohortName,
+        coverage_status AS status,
+        placement_count AS placementCount,
+        sort_status AS sortStatus,
+        sort_last_name AS sortLastName,
+        sort_first_name AS sortFirstName
+      FROM coverage_rows
+      WHERE (@status = 'all' OR coverage_status = @status)
+        AND (
+          @cursorStatus IS NULL
+          OR sort_status > @cursorStatus
+          OR (
+            sort_status = @cursorStatus
+            AND (
+              sort_last_name > @cursorLastName
+              OR (
+                sort_last_name = @cursorLastName
+                AND (
+                  sort_first_name > @cursorFirstName
+                  OR (
+                    sort_first_name = @cursorFirstName
+                    AND student_id > @cursorStudentId
+                  )
+                )
+              )
+            )
+          )
+        )
+      ORDER BY sort_status, sort_last_name, sort_first_name, student_id
+      LIMIT @rowLimit
+    `).all({
+      ...queryParams,
+      status,
+      cursorStatus: position?.[0] ?? null,
+      cursorLastName: position?.[1] ?? "",
+      cursorFirstName: position?.[2] ?? "",
+      cursorStudentId: position?.[3] ?? "",
+      rowLimit: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    const selectedStudentIds = selected.map((row) => row.studentId);
+    const placementsByStudent = /** @type {Map<string, Array<{
+     *   id: string,
+     *   hostName: string,
+     *   status: string,
+     *   startDate: string,
+     *   endDate: string
+     * }>>} */ (new Map());
+    for (const studentId of selectedStudentIds) {
+      placementsByStudent.set(studentId, []);
+    }
+    if (selectedStudentIds.length > 0) {
+      const placementRows = db.prepare(`
+        WITH matching_placements AS (
+          SELECT
+            p.id,
+            p.student_id AS studentId,
+            h.name AS hostName,
+            p.status,
+            p.start_date AS startDate,
+            p.end_date AS endDate,
+            ROW_NUMBER() OVER (
+              PARTITION BY p.student_id
+              ORDER BY p.start_date, p.end_date, p.id
+            ) AS placementRank
+          FROM placements p
+          JOIN hosts h
+            ON h.id = p.host_id
+            AND h.school_id = p.school_id
+          WHERE p.school_id = @schoolId
+            AND p.student_id IN (SELECT value FROM json_each(@studentIds))
+            AND p.status != 'cancelled'
+            AND p.start_date <= @periodEnd
+            AND p.end_date >= @periodStart
+        )
+        SELECT id, studentId, hostName, status, startDate, endDate
+        FROM matching_placements
+        WHERE placementRank <= 5
+        ORDER BY studentId, startDate, endDate, id
+      `).all({
+        schoolId: user.schoolId,
+        studentIds: JSON.stringify(selectedStudentIds),
+        periodStart: context.periodStart,
+        periodEnd: context.periodEnd,
+      });
+      for (const placement of placementRows) {
+        const studentPlacements = placementsByStudent.get(placement.studentId);
+        if (Array.isArray(studentPlacements)) {
+          studentPlacements.push({
+            id: placement.id,
+            hostName: placement.hostName,
+            status: placement.status,
+            startDate: placement.startDate,
+            endDate: placement.endDate,
+          });
+        }
+      }
+    }
+    const last = selected.at(-1);
+    return {
+      summary: {
+        total: counts.total,
+        unplaced: counts.unplaced,
+        placed: counts.placed,
+        conflict: counts.conflict,
+      },
+      items: selected.map((row) => {
+        const selectedPlacements = placementsByStudent.get(row.studentId);
+        const placements = Array.isArray(selectedPlacements)
+          ? selectedPlacements
+          : [];
+        return {
+          studentId: row.studentId,
+          studentName: row.studentName,
+          externalRef: row.externalRef,
+          cohortId: row.cohortId,
+          cohortName: row.cohortName,
+          status: row.status,
+          placementCount: row.placementCount,
+          placements,
+          additionalPlacements: row.placementCount - placements.length,
+        };
+      }),
+      nextCursor: hasMore
+        ? cursorCodec.encode(
+          "coverage",
+          [
+            last.sortStatus,
+            last.sortLastName,
+            last.sortFirstName,
+            last.studentId,
+          ],
+          binding,
+        )
+        : null,
+    };
+  })();
+}
+
+export function readDashboard(db, user, now = new Date()) {
   const scope = placementScope(user);
   const rows = db.prepare(`
     SELECT
@@ -357,6 +1015,7 @@ export function readDashboard(db, user) {
   const completionRows = rows.filter((row) => row.status !== "cancelled");
   const targetMinutes = completionRows.reduce((total, row) => total + row.target_minutes, 0);
   const loggedMinutes = completionRows.reduce((total, row) => total + row.logged_minutes, 0);
+  const today = currentSchoolDate(db, user.schoolId, now);
   return {
     placements: rows.length,
     active: rows.filter((row) => row.status === "active").length,
@@ -364,14 +1023,23 @@ export function readDashboard(db, user) {
     complete: rows.filter((row) => row.status === "complete").length,
     completion: targetMinutes === 0 ? 0 : Math.min(100, Math.round(loggedMinutes / targetMinutes * 100)),
     documentGaps: rows.reduce((total, row) => total + row.document_gaps, 0),
+    attention: readAttentionSummary(db, user, today),
   };
 }
 
 export function placementReadiness(db, placementId) {
   const placement = db.prepare(`
-    SELECT target_minutes AS targetMinutes
-    FROM placements
-    WHERE id = ?
+    SELECT
+      p.target_minutes AS targetMinutes,
+      p.programme_version_id AS programmeVersionId,
+      pv.version AS programmeVersion,
+      pv.minimum_check_ins AS minimumCheckIns,
+      programme.code AS programmeCode,
+      programme.name AS programmeName
+    FROM placements p
+    JOIN programme_versions pv ON pv.id = p.programme_version_id
+    JOIN programmes programme ON programme.id = pv.programme_id
+    WHERE p.id = ?
   `).get(placementId);
   if (!placement) throw notFound("Placement");
   const loggedMinutes = db.prepare(`
@@ -383,15 +1051,30 @@ export function placementReadiness(db, placementId) {
     "SELECT COUNT(*) AS count FROM check_ins WHERE placement_id = ? AND voided = 0",
   ).get(placementId).count;
   const documentRows = db.prepare(`
-      SELECT id, kind, status, superseded_at AS supersededAt
+      SELECT
+        id,
+        kind,
+        status,
+        requirement_id AS requirementId,
+        superseded_at AS supersededAt
       FROM placement_documents
       WHERE placement_id = ?
       ORDER BY kind, id
     `).all(placementId);
+  const requirementRows = db.prepare(`
+    SELECT
+      id,
+      code,
+      label,
+      accepted_statuses_json AS acceptedStatusesJson
+    FROM programme_requirements
+    WHERE programme_version_id = ?
+    ORDER BY sort_order, code
+  `).all(placement.programmeVersionId);
   const documents = new Map(
     documentRows
-      .filter((row) => row.kind !== "other" && row.supersededAt === null)
-      .map((row) => [row.kind, row.status]),
+      .filter((row) => row.requirementId !== null && row.supersededAt === null)
+      .map((row) => [row.requirementId, row.status]),
   );
   const blockers = [];
   if (loggedMinutes < placement.targetMinutes) {
@@ -400,22 +1083,20 @@ export function placementReadiness(db, placementId) {
       message: "Verified hours have not reached the placement target.",
     });
   }
-  if (checkIns < 1) {
+  if (checkIns < placement.minimumCheckIns) {
     blockers.push({
       code: "check_in_missing",
-      message: "Record at least one placement check-in.",
+      message: `Record at least ${placement.minimumCheckIns} placement check-in${
+        placement.minimumCheckIns === 1 ? "" : "s"
+      }.`,
     });
   }
-  const requirements = [
-    ["training_agreement", new Set(["signed", "archived"]), "Signed training agreement"],
-    ["attendance_log", new Set(["signed", "archived"]), "Signed attendance log"],
-    ["evaluation", new Set(["ready", "signed", "archived"]), "Completed evaluation"],
-  ];
-  for (const [kind, accepted, label] of requirements) {
-    if (!accepted.has(documents.get(kind))) {
+  for (const requirement of requirementRows) {
+    const accepted = new Set(JSON.parse(requirement.acceptedStatusesJson));
+    if (!accepted.has(documents.get(requirement.id))) {
       blockers.push({
-        code: `document_${kind}`,
-        message: `${label} is required.`,
+        code: `document_${requirement.code}`,
+        message: `${requirement.label} is required.`,
       });
     }
   }
@@ -424,11 +1105,19 @@ export function placementReadiness(db, placementId) {
       targetMinutes: placement.targetMinutes,
       loggedMinutes,
       checkIns,
+      programmeVersionId: placement.programmeVersionId,
+      minimumCheckIns: placement.minimumCheckIns,
+      requirements: requirementRows.map((row) => [
+        row.id,
+        row.code,
+        row.acceptedStatusesJson,
+      ]),
       documents: documentRows.map((row) => [
         row.id,
         row.kind,
         row.status,
         row.supersededAt !== null,
+        row.requirementId,
       ]),
       blockers: blockers.map((item) => item.code),
     }))
@@ -439,6 +1128,11 @@ export function placementReadiness(db, placementId) {
     fingerprint,
     verifiedHours: minutesToHours(loggedMinutes),
     targetHours: minutesToHours(placement.targetMinutes),
+    completedCheckIns: checkIns,
+    minimumCheckIns: placement.minimumCheckIns,
+    programmeCode: placement.programmeCode,
+    programmeName: placement.programmeName,
+    programmeVersion: placement.programmeVersion,
   };
 }
 
@@ -475,6 +1169,9 @@ export function listPlacements(
         c.name AS cohort_name,
         h.name AS host_name,
         u.display_name AS school_tutor_name,
+        programme.code AS programme_code,
+        programme.name AS programme_name,
+        programme_version.version AS programme_version,
         CASE p.status
           WHEN 'review' THEN 0
           WHEN 'active' THEN 1
@@ -498,6 +1195,8 @@ export function listPlacements(
       LEFT JOIN cohorts c ON c.id = s.cohort_id
       JOIN hosts h ON h.id = p.host_id
       LEFT JOIN users u ON u.id = p.school_tutor_id
+      JOIN programme_versions programme_version ON programme_version.id = p.programme_version_id
+      JOIN programmes programme ON programme.id = programme_version.programme_id
       WHERE ${scope}
         AND (@status = 'all' OR p.status = @status)
         AND (
@@ -566,6 +1265,9 @@ export function getPlacement(db, user, placementId) {
       h.contact_phone,
       h.address,
       u.display_name AS school_tutor_name,
+      programme.code AS programme_code,
+      programme.name AS programme_name,
+      programme_version.version AS programme_version,
       COALESCE((
         SELECT SUM(te.minutes)
         FROM time_entries te
@@ -582,6 +1284,8 @@ export function getPlacement(db, user, placementId) {
     LEFT JOIN cohorts c ON c.id = s.cohort_id
     JOIN hosts h ON h.id = p.host_id
     LEFT JOIN users u ON u.id = p.school_tutor_id
+    JOIN programme_versions programme_version ON programme_version.id = p.programme_version_id
+    JOIN programmes programme ON programme.id = programme_version.programme_id
     WHERE p.id = @placementId AND ${placementScope(user)}
   `).get({ ...params(user), placementId });
   if (!row) throw notFound("Placement");
@@ -632,20 +1336,24 @@ export function getPlacement(db, user, placementId) {
   }));
   const documents = db.prepare(`
     SELECT
-      id,
-      kind,
-      title,
-      status,
-      reference,
-      due_date AS dueDate,
-      superseded_at AS supersededAt,
-      superseded_by_id AS supersededById,
-      supersede_reason_code AS supersedeReasonCode,
-      revision,
-      updated_at AS updatedAt
-    FROM placement_documents
-    WHERE placement_id = ?
-    ORDER BY due_date IS NULL, due_date, title
+      pd.id,
+      pd.kind,
+      pd.title,
+      pd.status,
+      pd.reference,
+      pd.due_date AS dueDate,
+      pd.superseded_at AS supersededAt,
+      pd.superseded_by_id AS supersededById,
+      pd.requirement_id AS requirementId,
+      pd.supersede_reason_code AS supersedeReasonCode,
+      pr.code AS requirementCode,
+      pr.label AS requirementLabel,
+      pd.revision,
+      pd.updated_at AS updatedAt
+    FROM placement_documents pd
+    LEFT JOIN programme_requirements pr ON pr.id = pd.requirement_id
+    WHERE pd.placement_id = ?
+    ORDER BY pd.due_date IS NULL, pd.due_date, pd.title
   `).all(placementId).map((document) => ({
     ...document,
     superseded: document.supersededAt !== null,
@@ -1556,6 +2264,16 @@ export function updatePeriod(db, user, periodId, input, requestId) {
 export function createPlacement(db, user, input, requestId) {
   requirePermission(user, "write");
   assertDateRange(input.startDate, input.endDate);
+  const programme = input.programmeVersionId
+    ? programmeVersionForSchool(db, user.schoolId, input.programmeVersionId)
+    : currentProgrammeVersionByCode(db, user.schoolId, "VECTOR_DEFAULT");
+  if (!programme) {
+    throw new AppError(
+      422,
+      "programme_required",
+      "Select an active programme before creating the placement.",
+    );
+  }
   assertSchoolReferences(db, user, input);
   assertPlacementPeriodRange(
     db,
@@ -1576,12 +2294,13 @@ export function createPlacement(db, user, input, requestId) {
   const now = new Date().toISOString();
   const targetMinutes = hoursToMinutes(input.targetHours);
   assertTargetMinutesFeasible(input.startDate, input.endDate, targetMinutes);
-  commitWithAudit(db, () => db.prepare(`
+  commitWithAudit(db, () => {
+    const result = db.prepare(`
       INSERT INTO placements (
         id, school_id, student_id, host_id, period_id, school_tutor_id,
         host_tutor_name, host_tutor_email, start_date, end_date, target_minutes,
-        status, notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, notes, programme_version_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       user.schoolId,
@@ -1596,15 +2315,23 @@ export function createPlacement(db, user, input, requestId) {
       targetMinutes,
       initialStatus,
       input.notes ?? "",
+      programme.id,
       now,
       now,
-    ), {
+    );
+    seedPlacementRequirements(db, user.schoolId, id, programme.id, now);
+    return result;
+  }, {
     schoolId: user.schoolId,
     actorUserId: user.id,
     action: "placement.created",
     entityType: "placement",
     entityId: id,
-    metadata: { status: initialStatus },
+    metadata: {
+      status: initialStatus,
+      programmeCode: programme.programmeCode,
+      programmeVersion: programme.version,
+    },
     requestId,
   });
   return id;
@@ -1627,6 +2354,7 @@ export function updatePlacement(db, user, placementId, input, requestId) {
       start_date AS startDate,
       end_date AS endDate,
       target_minutes AS targetMinutes,
+      programme_version_id AS programmeVersionId,
       revision
     FROM placements
     WHERE id = ? AND school_id = ?
@@ -1698,6 +2426,7 @@ export function updatePlacement(db, user, placementId, input, requestId) {
       "startDate",
       "endDate",
       "targetHours",
+      "programmeVersionId",
     ].filter((field) => input[field] !== undefined);
     if (structuralFields.length > 0) {
       throw new AppError(
@@ -1756,6 +2485,14 @@ export function updatePlacement(db, user, placementId, input, requestId) {
     ? current.targetMinutes
     : hoursToMinutes(input.targetHours);
   assertTargetMinutesFeasible(startDate, endDate, targetMinutes);
+  const programmeVersionId = input.programmeVersionId ?? current.programmeVersionId;
+  const programme = programmeVersionForSchool(
+    db,
+    user.schoolId,
+    programmeVersionId,
+    { activeOnly: input.programmeVersionId !== undefined },
+  );
+  const programmeChanged = programmeVersionId !== current.programmeVersionId;
   const notes = input.notes ?? current.notes;
   const now = new Date().toISOString();
   const changedFields = [
@@ -1770,9 +2507,13 @@ export function updatePlacement(db, user, placementId, input, requestId) {
     "startDate",
     "endDate",
     "targetHours",
+    "programmeVersionId",
   ]
     .filter((field) => input[field] !== undefined);
   commitWithAudit(db, () => {
+    if (programmeChanged) {
+      assertPlacementProgrammeMutable(db, user.schoolId, placementId);
+    }
     const result = db.prepare(`
       UPDATE placements
       SET
@@ -1787,6 +2528,7 @@ export function updatePlacement(db, user, placementId, input, requestId) {
         start_date = ?,
         end_date = ?,
         target_minutes = ?,
+        programme_version_id = ?,
         revision = revision + 1,
         updated_at = ?
       WHERE id = ? AND school_id = ? AND revision = ?
@@ -1802,12 +2544,22 @@ export function updatePlacement(db, user, placementId, input, requestId) {
       startDate,
       endDate,
       targetMinutes,
+      programmeVersionId,
       now,
       placementId,
       user.schoolId,
       input.revision,
     );
     if (result.changes !== 1) throw conflict("The placement changed while it was being saved.");
+    if (programmeChanged) {
+      replacePlacementRequirements(
+        db,
+        user.schoolId,
+        placementId,
+        programmeVersionId,
+        now,
+      );
+    }
     return result;
   }, {
     schoolId: user.schoolId,
@@ -1821,6 +2573,8 @@ export function updatePlacement(db, user, placementId, input, requestId) {
       status,
       previousStatus: current.status,
       changedFields,
+      programmeCode: programme.programmeCode,
+      programmeVersion: programme.version,
       ...(reopeningComplete
         ? {
             reasonCode: input.reopenReasonCode,
@@ -1953,12 +2707,77 @@ export function addDocument(db, user, placementId, input, requestId) {
     );
   }
   const existing = input.kind === "other" ? null : db.prepare(`
-      SELECT id
+      SELECT
+        id,
+        title,
+        status,
+        reference,
+        requirement_id AS requirementId,
+        revision
       FROM placement_documents
       WHERE school_id = ? AND placement_id = ? AND kind = ?
         AND superseded_at IS NULL
     `).get(user.schoolId, placementId, input.kind);
   if (existing) {
+    const fillsUntouchedPlaceholder = existing.requirementId !== null
+      && existing.status === "missing"
+      && existing.reference === ""
+      && existing.revision === 1
+      && (
+        input.status !== "missing"
+        || (input.reference ?? "") !== ""
+        || input.dueDate != null
+      );
+    if (fillsUntouchedPlaceholder) {
+      const now = new Date().toISOString();
+      const revision = existing.revision + 1;
+      commitWithAudit(db, () => {
+        const result = db.prepare(`
+          UPDATE placement_documents
+          SET
+            status = ?,
+            reference = ?,
+            due_date = ?,
+            revision = revision + 1,
+            updated_at = ?
+          WHERE id = ?
+            AND school_id = ?
+            AND placement_id = ?
+            AND revision = ?
+            AND status = 'missing'
+            AND reference = ''
+            AND superseded_at IS NULL
+        `).run(
+          input.status,
+          input.reference ?? "",
+          input.dueDate || null,
+          now,
+          existing.id,
+          user.schoolId,
+          placementId,
+          existing.revision,
+        );
+        if (result.changes !== 1) {
+          throw conflict("The document changed while the programme placeholder was being saved.");
+        }
+      }, {
+        schoolId: user.schoolId,
+        actorUserId: user.id,
+        action: "document.updated",
+        entityType: "placement_document",
+        entityId: existing.id,
+        metadata: {
+          status: input.status,
+          previousStatus: existing.status,
+          changedFields: ["status", "reference", "dueDate"]
+            .filter((field) => input[field] !== undefined),
+          programmeRequirement: true,
+          placeholderFilled: true,
+        },
+        requestId,
+      });
+      return { id: existing.id, revision, created: false };
+    }
     throw new AppError(
       409,
       "document_kind_exists",
@@ -1966,22 +2785,38 @@ export function addDocument(db, user, placementId, input, requestId) {
       { documentId: existing.id, kind: input.kind },
     );
   }
+
+  const compatibleRequirement = input.kind === "other" ? null : db.prepare(`
+    SELECT pr.id, pr.label
+    FROM placements p
+    JOIN programme_requirements pr
+      ON pr.programme_version_id = p.programme_version_id
+    LEFT JOIN placement_documents pd
+      ON pd.placement_id = p.id
+      AND pd.requirement_id = pr.id
+      AND pd.superseded_at IS NULL
+    WHERE p.id = ?
+      AND p.school_id = ?
+      AND pr.code = ? COLLATE NOCASE
+      AND pd.id IS NULL
+  `).get(placementId, user.schoolId, input.kind);
   const id = randomUUID();
   const now = new Date().toISOString();
   commitWithAudit(db, () => db.prepare(`
       INSERT INTO placement_documents (
         id, school_id, placement_id, kind, title, status, reference, due_date,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        requirement_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       user.schoolId,
       placementId,
       input.kind,
-      input.title,
+      compatibleRequirement?.label ?? input.title,
       input.status,
       input.reference ?? "",
       input.dueDate || null,
+      compatibleRequirement?.id ?? null,
       now,
       now,
     ), {
@@ -1990,10 +2825,13 @@ export function addDocument(db, user, placementId, input, requestId) {
     action: "document.created",
     entityType: "placement_document",
     entityId: id,
-    metadata: { status: input.status },
+    metadata: {
+      status: input.status,
+      programmeRequirement: Boolean(compatibleRequirement),
+    },
     requestId,
   });
-  return id;
+  return { id, revision: 1, created: true };
 }
 
 export function updateTimeEntry(db, user, placementId, entryId, input, requestId) {
@@ -2234,6 +3072,7 @@ export function updateDocument(db, user, placementId, documentId, input, request
       pd.status,
       pd.reference,
       pd.due_date AS dueDate,
+      pd.requirement_id AS requirementId,
       pd.superseded_at AS supersededAt,
       pd.superseded_by_id AS supersededById,
       pd.revision,
@@ -2258,6 +3097,19 @@ export function updateDocument(db, user, placementId, documentId, input, request
   }
   if (document.status === "archived") {
     throw new AppError(409, "document_frozen", "Archived evidence is immutable.");
+  }
+  if (
+    document.requirementId !== null
+    && (
+      (input.kind !== undefined && input.kind !== document.kind)
+      || (input.title !== undefined && input.title !== document.title)
+    )
+  ) {
+    throw new AppError(
+      409,
+      "programme_requirement_locked",
+      "The type and title of a programme requirement cannot be changed on one placement.",
+    );
   }
   if (
     document.status === "signed"
@@ -2369,6 +3221,7 @@ export function supersedeDocument(db, user, placementId, documentId, input, requ
       pd.id,
       pd.kind,
       pd.status,
+      pd.requirement_id AS requirementId,
       pd.superseded_at AS supersededAt,
       pd.revision,
       p.start_date AS startDate,
@@ -2412,8 +3265,8 @@ export function supersedeDocument(db, user, placementId, documentId, input, requ
     db.prepare(`
       INSERT INTO placement_documents (
         id, school_id, placement_id, kind, title, status, reference, due_date,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        requirement_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       replacementId,
       user.schoolId,
@@ -2423,6 +3276,7 @@ export function supersedeDocument(db, user, placementId, documentId, input, requ
       input.status,
       input.reference ?? "",
       input.dueDate || null,
+      document.requirementId,
       now,
       now,
     );

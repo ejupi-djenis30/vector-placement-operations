@@ -409,6 +409,7 @@ const releaseFileInputs = Object.freeze([
   "e2e/presentation.spec.mjs",
   "e2e/workspace.spec.mjs",
   "migrations/001_initial.sql",
+  "migrations/002_programme_policies.sql",
   "package-lock.json",
   "package.json",
   "playwright.config.mjs",
@@ -441,6 +442,7 @@ const releaseFileInputs = Object.freeze([
   "server/index.mjs",
   "server/password.mjs",
   "server/portability.mjs",
+  "server/programmes.mjs",
   "server/rbac.mjs",
   "server/routes.mjs",
   "server/schemas.mjs",
@@ -461,10 +463,13 @@ const releaseFileInputs = Object.freeze([
   "site/robots.txt",
   "site/styles.css",
   "test-support/server-test-helper.mjs",
+  "test/attention.integration.test.mjs",
   "test/auth-races.integration.test.mjs",
   "test/clean-install.integration.test.mjs",
+  "test/coverage.integration.test.mjs",
   "test/lifecycle-integrity.integration.test.mjs",
   "test/operations.integration.test.mjs",
+  "test/programme-policies.integration.test.mjs",
   "test/release-contract.test.mjs",
   "test/release-publisher.test.mjs",
   "test/release-workflow-contract.test.mjs",
@@ -1047,7 +1052,7 @@ async function extractTarGzipArchive(archive, destination, version) {
   return root;
 }
 
-function runAcceptanceCommand(command, arguments_, options) {
+function runAcceptanceProcess(command, arguments_, options) {
   const result = spawnSync(command, arguments_, {
     ...options,
     encoding: "utf8",
@@ -1055,10 +1060,34 @@ function runAcceptanceCommand(command, arguments_, options) {
     maxBuffer: 20 * 1024 * 1024,
   });
   assert.ifError(result.error);
+  return result;
+}
+
+function runAcceptanceCommand(command, arguments_, options) {
+  const result = runAcceptanceProcess(command, arguments_, options);
   assert.equal(
     result.status,
     0,
     `${command} ${arguments_.join(" ")} failed:\n${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  );
+}
+
+function runExpectedAcceptanceFailure(
+  command,
+  arguments_,
+  options,
+  expectedMessage,
+) {
+  const result = runAcceptanceProcess(command, arguments_, options);
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  assert.notEqual(
+    result.status,
+    0,
+    `${command} ${arguments_.join(" ")} unexpectedly accepted a bootstrap secret.`,
+  );
+  assert.ok(
+    output.includes(expectedMessage),
+    `${command} ${arguments_.join(" ")} failed without the required bootstrap-removal message:\n${output}`,
   );
 }
 
@@ -1079,6 +1108,7 @@ export async function acceptReleaseCandidate({ directory, sourceCommit, tag } = 
       ...process.env,
       VECTOR_RELEASE_ACCEPTANCE_CHILD: "1",
     };
+    delete environment.VECTOR_BOOTSTRAP_ADMIN_PASSWORD;
     runAcceptanceCommand(npm, [...npmArguments, "ci", "--no-audit", "--no-fund"], {
       cwd: root,
       env: environment,
@@ -1095,18 +1125,36 @@ export async function acceptReleaseCandidate({ directory, sourceCommit, tag } = 
       VECTOR_ORIGIN: "http://127.0.0.1:4173",
       VECTOR_COOKIE_SECURE: "false",
       VECTOR_TRUST_PROXY: "false",
-      VECTOR_BOOTSTRAP_ADMIN_PASSWORD: "release-acceptance-password-2026",
       VECTOR_BOOTSTRAP_TIME_ZONE: "Europe/Zurich",
       VECTOR_SEED_SYNTHETIC: "false",
       VECTOR_LOG_LEVEL: "silent",
     };
+    const bootstrapEnvironment = {
+      ...runtimeEnvironment,
+      VECTOR_BOOTSTRAP_ADMIN_PASSWORD: "release-acceptance-password-2026",
+    };
+    const startupArguments = [
+      "--input-type=module",
+      "--eval",
+      "const {buildApp}=await import('./server/app.mjs');const app=await buildApp();app.locals.vector.close();",
+    ];
+    runExpectedAcceptanceFailure(
+      process.execPath,
+      startupArguments,
+      { cwd: root, env: bootstrapEnvironment },
+      "VECTOR initialization completed. Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from the "
+        + "environment and restart VECTOR before serving users.",
+    );
+    runExpectedAcceptanceFailure(
+      process.execPath,
+      startupArguments,
+      { cwd: root, env: bootstrapEnvironment },
+      "VECTOR_BOOTSTRAP_ADMIN_PASSWORD must be removed after initialization. Remove it "
+        + "from the environment and restart VECTOR.",
+    );
     runAcceptanceCommand(
       process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        "const {buildApp}=await import('./server/app.mjs');const app=await buildApp();app.locals.vector.close();",
-      ],
+      startupArguments,
       { cwd: root, env: runtimeEnvironment },
     );
     runAcceptanceCommand(npm, [...npmArguments, "run", "doctor"], {

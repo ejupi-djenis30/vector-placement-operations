@@ -49,13 +49,16 @@ headers:
 | --- | --- |
 | Students | `externalRef,firstName,lastName,email,cohortName,cohortAcademicYear` |
 | Hosts | `name,sector,contactName,contactEmail,contactPhone,address` |
-| Placements | `studentExternalRef,hostName,periodName,schoolTutorEmail,hostTutorName,hostTutorEmail,startDate,endDate,targetHours,status,notes` |
+| Placements | `studentExternalRef,hostName,programmeCode,periodName,schoolTutorEmail,hostTutorName,hostTutorEmail,startDate,endDate,targetHours,status,notes` |
 
 Templates deliberately use stable operational keys, not VECTOR's internal UUIDs. Student imports
 match a cohort by the pair `cohortName` and `cohortAcademicYear`. Placement imports match the
 student's `studentExternalRef`, the host's `hostName`, an optional `periodName` and an optional
-`schoolTutorEmail`. Each reference must resolve to exactly one active record in the signed-in
-administrator's school. Missing, inactive or ambiguous references reject the whole file.
+`schoolTutorEmail`. `programmeCode` selects the latest published version of an active programme.
+Files made from an older VECTOR 3.0 template may omit that column; VECTOR then uses
+`VECTOR_DEFAULT`. Add an explicit programme code to every new operational template so the policy
+choice is visible and reviewable. Each reference must resolve to exactly one active record in the
+signed-in administrator's school. Missing, inactive or ambiguous references reject the whole file.
 
 Send the completed file as `text/csv`. Start with `dryRun=true`, review the returned row errors and
 counts, then repeat the same validated file with `dryRun=false`. A dry run performs the same
@@ -71,7 +74,7 @@ Review the validation preview for:
 - selected resource and accepted row count;
 - required, duplicate and unrecognised columns;
 - duplicate external references;
-- missing cohort, host, period or placement relationships;
+- missing programme, cohort, host, period or placement relationships;
 - invalid dates, date ranges, statuses, email addresses and minute values; and
 - records that already exist and would therefore be rejected.
 

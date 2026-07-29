@@ -125,7 +125,7 @@ function localTagGit({
   const runGit = (arguments_) => {
     calls.push(arguments_);
     const invocation = arguments_.join("\0");
-    if (invocation === `show-ref\0--verify\0--hash\0refs/tags/v3.0.0`) {
+    if (invocation === `show-ref\0--verify\0--hash\0refs/tags/v3.3.0`) {
       return { stderr: "", stdout: `${TAG_OBJECT}\n` };
     }
     if (invocation === `cat-file\0-t\0${TAG_OBJECT}`) {
@@ -137,18 +137,18 @@ function localTagGit({
         stdout:
           `object ${tagTarget}\n` +
           "type commit\n" +
-          "tag v3.0.0\n" +
+          "tag v3.3.0\n" +
           `tagger ${taggerName} <${taggerEmail}> 1784764800 +0200\n\n` +
-          "VECTOR 3.0.0\n",
+          "VECTOR 3.3.0\n",
       };
     }
     if (invocation === `cat-file\0-t\0${COMMIT}`) {
       return { stderr: "", stdout: "commit\n" };
     }
-    if (invocation === "rev-parse\0--verify\0refs/tags/v3.0.0^{}") {
+    if (invocation === "rev-parse\0--verify\0refs/tags/v3.3.0^{}") {
       return { stderr: "", stdout: `${peeledTarget}\n` };
     }
-    if (invocation === "verify-tag\0--raw\0refs/tags/v3.0.0") {
+    if (invocation === "verify-tag\0--raw\0refs/tags/v3.3.0") {
       return {
         stderr:
           `Good "git" signature for 69587167+ejupi-djenis30@users.noreply.github.com ` +
@@ -162,33 +162,34 @@ function localTagGit({
 }
 
 test("version metadata stays synchronized and accepts only its stable tag", async () => {
-  const metadata = await validateReleaseMetadata({ tag: "v3.0.0" });
-  assert.equal(metadata.version, "3.0.0");
-  assert.match(metadata.notes, /self-hosted, multi-user/);
+  const metadata = await validateReleaseMetadata({ tag: "v3.3.0" });
+  assert.equal(metadata.version, "3.3.0");
+  assert.match(metadata.notes, /cohort coverage board/);
+  assert.match(metadata.notes, /idle session timeout/);
   await assert.rejects(() => validateReleaseMetadata({ tag: "v2.0.0" }), /does not match package version/);
-  await assert.rejects(() => validateReleaseMetadata({ tag: "3.0.0" }), /does not match package version/);
+  await assert.rejects(() => validateReleaseMetadata({ tag: "3.3.0" }), /does not match package version/);
 });
 
 test("tag preflight requires the tracked GitHub-verifiable tagger identity", async () => {
   const result = await validateTagPreflight({
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     taggerName: "ejupi-djenis30",
     taggerEmail: "69587167+ejupi-djenis30@users.noreply.github.com",
   });
   assert.deepEqual(result, {
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     tagger: {
       email: "69587167+ejupi-djenis30@users.noreply.github.com",
       name: "ejupi-djenis30",
     },
-    version: "3.0.0",
+    version: "3.3.0",
   });
   await assert.rejects(
     () => validateTagPreflight({
       sourceCommit: COMMIT,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
       taggerName: "Unapproved Tagger",
       taggerEmail: UNAPPROVED_TAGGER_EMAIL,
     }),
@@ -197,7 +198,7 @@ test("tag preflight requires the tracked GitHub-verifiable tagger identity", asy
   await assert.rejects(
     () => validateTagPreflight({
       sourceCommit: COMMIT,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
       taggerName: "ejupi-djenis30",
       taggerEmail: UNAPPROVED_TAGGER_EMAIL,
     }),
@@ -209,7 +210,7 @@ test("tag preflight CLI fails closed for the unpublished corporate tagger identi
   const baseArguments = [
     releaseCli,
     "tag-preflight",
-    "--tag", "v3.0.0",
+    "--tag", "v3.3.0",
     "--commit", COMMIT,
     "--tagger-name", "ejupi-djenis30",
     "--tagger-email",
@@ -248,7 +249,7 @@ test("tag preflight rejects Git tagger environment overrides before tag creation
   const rejected = spawnSync(process.execPath, [
     releaseCli,
     "tag-preflight",
-    "--tag", "v3.0.0",
+    "--tag", "v3.3.0",
     "--commit", COMMIT,
     "--tagger-name", "ejupi-djenis30",
     "--tagger-email", "69587167+ejupi-djenis30@users.noreply.github.com",
@@ -280,7 +281,7 @@ test("local signed-tag verification checks the exact ref, direct target, tagger 
   const result = await validateLocalSignedTag({
     runGit: fixture.runGit,
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
   });
   assert.deepEqual(result, {
     signingKey: {
@@ -288,7 +289,7 @@ test("local signed-tag verification checks the exact ref, direct target, tagger 
       fingerprint: releaseSigningKeyFingerprint,
     },
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     tagObject: TAG_OBJECT,
     tagger: {
       email: "69587167+ejupi-djenis30@users.noreply.github.com",
@@ -299,12 +300,12 @@ test("local signed-tag verification checks the exact ref, direct target, tagger 
     "show-ref",
     "--verify",
     "--hash",
-    "refs/tags/v3.0.0",
+    "refs/tags/v3.3.0",
   ]);
   assert.deepEqual(fixture.calls.at(-1), [
     "verify-tag",
     "--raw",
-    "refs/tags/v3.0.0",
+    "refs/tags/v3.3.0",
   ]);
 });
 
@@ -314,7 +315,7 @@ test("local signed-tag verification rejects an identity introduced by a committe
     () => validateLocalSignedTag({
       runGit: fixture.runGit,
       sourceCommit: COMMIT,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
     }),
     /actual annotated tagger email differs from release policy/i,
   );
@@ -326,7 +327,7 @@ test("local signed-tag verification rejects indirect targets and an unapproved s
     () => validateLocalSignedTag({
       runGit: indirect.runGit,
       sourceCommit: COMMIT,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
     }),
     /does not directly target the reviewed commit/,
   );
@@ -336,7 +337,7 @@ test("local signed-tag verification rejects indirect targets and an unapproved s
     () => validateLocalSignedTag({
       runGit: wrongKey.runGit,
       sourceCommit: COMMIT,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
     }),
     /was not verified with the release-policy SSH principal and key fingerprint/,
   );
@@ -350,22 +351,22 @@ test("two independently assembled self-hosted candidates are byte-for-byte ident
   await buildReleaseCandidate({
     output: first,
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     verifySource: false,
   });
   await buildReleaseCandidate({
     output: second,
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     verifySource: false,
   });
   const result = await compareReleaseCandidates({
     directory: first,
     otherDirectory: second,
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
   });
-  assert.deepEqual(result, { sourceCommit: COMMIT, version: "3.0.0" });
+  assert.deepEqual(result, { sourceCommit: COMMIT, version: "3.3.0" });
   assert.deepEqual(await readdir(first), await readdir(second));
 });
 
@@ -373,22 +374,31 @@ test(
   "the extracted self-hosted artifact installs, tests and passes runtime diagnostics",
   { skip: process.env.VECTOR_RELEASE_ACCEPTANCE_CHILD === "1" },
   async (context) => {
+    const previousBootstrapPassword = process.env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD;
+    process.env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD = "ambient-release-secret-must-not-be-retained";
+    context.after(() => {
+      if (previousBootstrapPassword === undefined) {
+        delete process.env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD;
+      } else {
+        process.env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD = previousBootstrapPassword;
+      }
+    });
     const root = await mkdtemp(join(tmpdir(), "vector-release-acceptance-contract-"));
     context.after(() => rm(root, { recursive: true, force: true }));
     const candidate = resolve(root, "candidate");
     await buildReleaseCandidate({
       output: candidate,
       sourceCommit: COMMIT,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
       verifySource: false,
     });
     assert.deepEqual(
       await acceptReleaseCandidate({
         directory: candidate,
         sourceCommit: COMMIT,
-        tag: "v3.0.0",
+        tag: "v3.3.0",
       }),
-      { sourceCommit: COMMIT, version: "3.0.0" },
+      { sourceCommit: COMMIT, version: "3.3.0" },
     );
   },
 );
@@ -440,23 +450,23 @@ test("candidate verification rejects a checksum-consistent host-specific gzip he
   await buildReleaseCandidate({
     output: candidate,
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     verifySource: false,
   });
 
-  const archivePath = resolve(candidate, "vector-self-hosted-3.0.0.tar.gz");
+  const archivePath = resolve(candidate, "vector-self-hosted-3.3.0.tar.gz");
   const archive = await readFile(archivePath);
   archive[9] = 3;
   await writeFile(archivePath, archive);
   const checksumPath = resolve(candidate, "SHA256SUMS");
   const checksums = (await readFile(checksumPath, "utf8")).replace(
-    /^[0-9a-f]{64}  vector-self-hosted-3\.0\.0\.tar\.gz$/m,
-    `${sha256(archive)}  vector-self-hosted-3.0.0.tar.gz`,
+    /^[0-9a-f]{64}  vector-self-hosted-3\.3\.0\.tar\.gz$/m,
+    `${sha256(archive)}  vector-self-hosted-3.3.0.tar.gz`,
   );
   await writeFile(checksumPath, checksums);
 
   await assert.rejects(
-    () => verifyReleaseCandidate({ directory: candidate, sourceCommit: COMMIT, tag: "v3.0.0" }),
+    () => verifyReleaseCandidate({ directory: candidate, sourceCommit: COMMIT, tag: "v3.3.0" }),
     /unknown operating-system marker/,
   );
 });
@@ -471,7 +481,7 @@ test("candidate verification detects archive drift even when checksums are rewri
     verifySource: false,
   });
 
-  const archivePath = resolve(candidate, "vector-self-hosted-3.0.0.zip");
+  const archivePath = resolve(candidate, "vector-self-hosted-3.3.0.zip");
   const archive = await readFile(archivePath);
   const contentOffset = archive.indexOf(Buffer.from("<!doctype html>"));
   assert.ok(contentOffset >= 0, "The deterministic ZIP must contain index.html bytes in store mode.");
@@ -481,8 +491,8 @@ test("candidate verification detects archive drift even when checksums are rewri
   const digest = crypto.createHash("sha256").update(archive).digest("hex");
   const checksumPath = resolve(candidate, "SHA256SUMS");
   const checksums = (await readFile(checksumPath, "utf8")).replace(
-    /^[0-9a-f]{64}  vector-self-hosted-3\.0\.0\.zip$/m,
-    `${digest}  vector-self-hosted-3.0.0.zip`,
+    /^[0-9a-f]{64}  vector-self-hosted-3\.3\.0\.zip$/m,
+    `${digest}  vector-self-hosted-3.3.0.zip`,
   );
   await writeFile(checksumPath, checksums);
 

@@ -44,14 +44,17 @@ chmod 600 .env
 Edit `.env` before starting:
 
 1. Set `VECTOR_ORIGIN` to the exact external HTTPS origin, including a non-standard port when used.
-2. Replace every bootstrap identity value with the institution's own details.
+2. Fill every blank bootstrap identity value with the institution's own details.
 3. Set `VECTOR_BOOTSTRAP_TIME_ZONE` to the school's IANA time zone, such as `Europe/Zurich`.
    VECTOR uses the school's local date when it validates time entries and check-ins.
-4. Set `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` to a long, unique initial password. The repository does
-   not ship a production password.
+4. Set `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` to a long, unique initial password for the one-shot
+   initialization. The repository does not ship a production password.
 5. Leave `VECTOR_SEED_SYNTHETIC=false` for a real installation.
 6. Keep `VECTOR_COOKIE_SECURE=true` when users connect over HTTPS.
-7. Set `VECTOR_TRUST_PROXY=1` only for the documented topology with exactly one controlled reverse
+7. Set `VECTOR_SESSION_HOURS` and `VECTOR_SESSION_IDLE_MINUTES` to the institution's access
+   policy. The inactivity timeout must be at least 5 minutes and no longer than the absolute
+   lifetime converted to minutes.
+8. Set `VECTOR_TRUST_PROXY=1` only for the documented topology with exactly one controlled reverse
    proxy between the browser and VECTOR. Set it to `false` when there is no proxy. Do not use the
    unrestricted boolean value `true`.
 
@@ -61,18 +64,36 @@ an untrusted network without TLS is not a supported production setup.
 
 ## Start and verify
 
-Validate the resolved Compose configuration before it can create resources:
+Validate the resolved Compose configuration and build the reviewed image:
 
 ```sh
 docker compose config
 docker compose build --pull
+```
+
+For a new installation, run the application once without publishing a port:
+
+```sh
+docker compose run --rm --no-deps vector
+```
+
+After creating the school and initial administrator, production initialization deliberately exits
+non-zero with an instruction to remove `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` and restart. It never
+opens the HTTP listener while that secret is present. Treat any other error as a failed
+initialization and investigate it before continuing.
+
+Remove `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` from `.env`, then start the service:
+
+```sh
 docker compose up -d
 docker compose ps
 ```
 
 The container runs as the unprivileged `node` user. Its root filesystem is read-only; only the
 named volume mounted at `/var/lib/vector` is writable. On startup VECTOR opens the database, applies
-pending migrations and bootstraps the first school only when the database is empty.
+pending migrations and refuses an empty database unless the explicit initialization secret is
+present. An existing installation must not retain that secret: VECTOR fails closed instead of
+silently creating a replacement installation when a data volume is missing.
 
 Check readiness from the host:
 
@@ -86,10 +107,9 @@ email addresses, identifiers, tokens and record content have been removed.
 
 The bootstrap password is temporary. On first sign-in VECTOR blocks every workspace route until the
 administrator replaces it with a different password of at least 14 characters. The change revokes
-all active sessions, including the session that changed it. Sign in again with the replacement,
-then remove `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` from `.env` and recreate the service with
-`docker compose up -d`. Existing credentials are stored as a password hash in the database; the
-bootstrap secret is not needed for later starts.
+all active sessions, including the session that changed it. Sign in again with the replacement.
+Existing credentials are stored as a password hash in the database; the bootstrap secret has
+already been removed and is not needed for later starts.
 
 ## Run directly
 
@@ -104,9 +124,12 @@ npm start
 ```
 
 `npm start` uses Node's built-in `--env-file-if-exists=.env` support; no shell export step is
-required. Set `VECTOR_DB_PATH` to a private local directory owned by the service account and protect
-that directory with mode `0700` on POSIX or a restricted NTFS ACL on Windows. Run one process only
-and use the same HTTPS proxy, backup, retention and upgrade controls described for Compose.
+required. On a new production database, the first `npm start` initializes the school and exits
+non-zero as described above. Remove `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` from `.env` and run
+`npm start` again to serve users. Set `VECTOR_DB_PATH` to a private local directory owned by the
+service account and protect that directory with mode `0700` on POSIX or a restricted NTFS ACL on
+Windows. Run one process only and use the same HTTPS proxy, backup, retention and upgrade controls
+described for Compose.
 
 ## Reverse proxy
 
@@ -149,16 +172,22 @@ may add a separate edge limit, but it should not replace the application control
 | `VECTOR_BOOTSTRAP_TIME_ZONE` | First school's IANA time zone | Set the school's operational zone, for example `Europe/Zurich` |
 | `VECTOR_BOOTSTRAP_ADMIN_EMAIL` | First administrator login | Use an institution-controlled address |
 | `VECTOR_BOOTSTRAP_ADMIN_NAME` | First administrator display name | Used only for an empty database |
-| `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` | First administrator password | Required for an empty database; no default |
+| `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` | First administrator password | Required only for one-shot initialization; remove before serving users |
 | `VECTOR_COOKIE_SECURE` | Marks session cookies HTTPS-only | Keep `true` for production |
 | `VECTOR_TRUST_PROXY` | Number of trusted proxy hops | Use `1` for one controlled proxy; otherwise `false` |
 | `VECTOR_SEED_SYNTHETIC` | Adds fictional evaluation records | Keep `false` with real records |
 | `VECTOR_BODY_LIMIT` | Maximum request body in bytes | Increase only for a documented import need |
-| `VECTOR_SESSION_HOURS` | Session lifetime | Choose from the institution's access policy |
+| `VECTOR_SESSION_HOURS` | Absolute session lifetime | Choose from the institution's access policy |
+| `VECTOR_SESSION_IDLE_MINUTES` | Server-enforced inactivity timeout | At least `5` and no longer than `VECTOR_SESSION_HOURS × 60`; default `45` |
 | `VECTOR_LOG_LEVEL` | Runtime log level | Use `info` normally; avoid verbose production logs |
 
 `VECTOR_BIND_ADDRESS` and `VECTOR_PUBLISHED_PORT` are Compose-only host settings, not application
 configuration.
+
+VECTOR ends a session at whichever limit is reached first. Each authenticated API request advances
+the inactivity timestamp without ever extending the absolute expiry. When either limit is reached,
+the server removes the database session and instructs the browser to discard its session cookie;
+the user must sign in again.
 
 ## Administrators
 
@@ -206,6 +235,73 @@ Use named accounts. Do not share one administrator login between staff members. 
 role and data scope required, review active accounts regularly and disable access when a person no
 longer needs it.
 
+## Cohort coverage planning
+
+The **Coverage** view gives administrators, coordinators and read-only viewers a school-wide
+planning board before every student has a placement record. Select an active cohort and placement
+period to classify its active students as:
+
+- **Unplaced** — no non-cancelled placement intersects the selected period;
+- **Placed** — one or more placements cover the period without overlapping each other; or
+- **Conflict** — at least two of the student's placements overlap.
+
+Cancelled placements and records entirely outside the period do not count. Consecutive placements
+that do not share a calendar date are not conflicts. Administrators and coordinators can start a
+new placement from an uncovered row; VECTOR preselects the student, period and period dates, while
+the operator still chooses the host, programme and other accountable details.
+
+Coverage intentionally excludes tutor accounts because it must enumerate students who have not yet
+been assigned to any tutor. Use a viewer account when someone needs school-wide planning visibility
+without mutation rights.
+
+## Daily attention inbox
+
+The **Attention** view is the operational starting point for coordinators and tutors. It derives a
+bounded, paged queue from the records already in VECTOR: evidence that is overdue or due within 14
+school-calendar days, pending hour reviews, placement start/end transitions, placements waiting for
+close-out and imminent placements without an assigned school tutor.
+
+The queue is not a background notification service and sends no email. It is recalculated on each
+request using the school's configured IANA time zone. Every item stays inside the signed-in user's
+placement scope; assigned tutors cannot discover another tutor's records. Opening an item takes the
+user to the source placement, where completing the underlying review, assignment, status change or
+evidence update removes the item.
+
+Check-in next actions, document due dates/references and relevant placement contacts are visible in
+the placement record. Keep those fields concise and operational: they are placement data covered by
+the same access, backup, export, retention and incident-response responsibilities as the rest of the
+record.
+
+## Placement programmes
+
+Administrators and coordinators manage programme policies from **Programmes** in the workspace.
+Each programme has a stable uppercase code used by CSV imports, plus one or more immutable versions.
+A published version defines:
+
+- the target hours suggested for a new placement;
+- the minimum number of non-voided check-ins required for completion; and
+- each required evidence item with the document states that satisfy it.
+
+Publishing a new version does not rewrite existing placements. A placement keeps its selected
+version so its readiness decision remains explainable later. Programme metadata and availability
+may be edited, but published rules cannot be changed or deleted.
+
+VECTOR 3.1 automatically creates `VECTOR_DEFAULT` during upgrade. It reproduces the 3.0 completion
+rules and is assigned to every existing placement. Create and review institution-specific
+programmes before deactivating that compatibility programme. Deactivation prevents new selection;
+it does not hide historical records.
+
+Changing the programme on a newly created placement is permitted only before staff record time,
+check-ins or evidence. VECTOR then replaces only the untouched requirement placeholders; it never
+removes manually added documents. As soon as any real activity exists, the policy is frozen so the
+version shown in the placement remains the version under which that work was recorded. Use a new
+placement or a governed operational correction instead of rewriting historical rules.
+
+The workspace exposes the complete immutable version history for each programme. A school may
+configure up to 200 programmes, with up to 100 published versions per programme. VECTOR enforces
+both limits on writes and returns the complete collection within those bounds, rather than silently
+truncating programme or version records.
+
 ## Branding and logo concurrency
 
 Branding reads return a positive `revision` and the same value as a strong `ETag`. JSON branding
@@ -231,13 +327,25 @@ overwriting another administrator's work.
 1. Read the release notes and compatibility notes.
 2. Create and inspect a fresh backup as described in
    [backup and restore](backup-restore.md).
-3. Build the intended release with `docker compose build --pull`.
-4. Recreate the service with `docker compose up -d`.
-5. Wait for `/api/health/ready`, then run `docker compose exec vector npm run doctor`.
-6. Perform a short authenticated check of search, a record view and the audit trail.
+3. Confirm `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` is absent from `.env`.
+4. Build the intended release with `docker compose build --pull`.
+5. Recreate the service with `docker compose up -d`.
+6. Wait for `/api/health/ready`, then run `docker compose exec vector npm run doctor`.
+7. Perform a short authenticated check of search, a record view and the audit trail.
 
 Migrations run on startup and are forward-only. A code rollback may require restoring the
 pre-upgrade database with the matching earlier application release.
+
+The 3.1 migration adds programme policies and backfills existing placements and recognised
+training-agreement, attendance-log and evaluation records. Take and inspect a backup before the
+upgrade. After startup, verify that `VECTOR_DEFAULT` appears under **Programmes** and open one
+existing placement to confirm its programme and readiness information.
+
+VECTOR 3.3 adds no database migration. It introduces the derived **Coverage** view and defaults
+`VECTOR_SESSION_IDLE_MINUTES` to `45` when the variable is absent. Before upgrading, confirm that
+the chosen inactivity limit is no greater than `VECTOR_SESSION_HOURS × 60`; after startup, verify
+both a Coverage query and re-authentication after the institution's configured idle interval in a
+non-production rehearsal.
 
 ## Routine operations
 

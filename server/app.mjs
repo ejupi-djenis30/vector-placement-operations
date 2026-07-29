@@ -3,7 +3,15 @@ import cookieParser from "cookie-parser";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
-import { readSession, requireAuthenticated, verifyCsrf, verifyRequestOrigin } from "./auth.mjs";
+import {
+  SESSION_COOKIE,
+  readSession,
+  requireAuthenticated,
+  sessionCookieOptions,
+  touchSession,
+  verifyCsrf,
+  verifyRequestOrigin,
+} from "./auth.mjs";
 import { loadConfig } from "./config.mjs";
 import { bootstrapDatabase, migrateDatabase, openDatabase } from "./db.mjs";
 import { AppError } from "./errors.mjs";
@@ -44,8 +52,22 @@ export async function buildApp(options = {}) {
   const config = options.config ?? loadConfig(options.env);
   const db = options.db ?? openDatabase(config.databasePath);
   const ownsDatabase = !options.db;
-  migrateDatabase(db);
-  const bootstrap = await bootstrapDatabase(db, config);
+  let bootstrap;
+  try {
+    migrateDatabase(db);
+    bootstrap = await bootstrapDatabase(db, config);
+    if (config.production && config.bootstrapAdminPassword) {
+      const message = bootstrap.created
+        ? "VECTOR initialization completed. Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from the "
+          + "environment and restart VECTOR before serving users."
+        : "VECTOR_BOOTSTRAP_ADMIN_PASSWORD must be removed after initialization. Remove it "
+          + "from the environment and restart VECTOR.";
+      throw new Error(message);
+    }
+  } catch (error) {
+    if (ownsDatabase && db.open) db.close();
+    throw error;
+  }
 
   const app = express();
   app.disable("x-powered-by");
@@ -62,6 +84,7 @@ export async function buildApp(options = {}) {
   };
 
   app.use((request, response, next) => {
+    request.startedAt = new Date();
     request.id = randomUUID();
     response.set("X-Request-ID", request.id);
     next();
@@ -115,14 +138,22 @@ export async function buildApp(options = {}) {
     type: "application/json",
   }));
 
-  app.use("/api", (request, _response, next) => {
-    const session = readSession(db, request.cookies.vector_session);
+  app.use("/api", (request, response, next) => {
+    const token = request.cookies[SESSION_COOKIE];
+    const session = readSession(db, token, config.sessionIdleMinutes);
+    if (token && !session) {
+      if (requestKey(request) === "POST /api/auth/login") {
+        request.invalidSessionCookie = true;
+      } else {
+        response.clearCookie(SESSION_COOKIE, sessionCookieOptions(config));
+      }
+    }
     request.session = session;
     request.user = session?.user ?? null;
     next();
   });
 
-  app.use("/api", (request, _response, next) => {
+  app.use("/api", (request, response, next) => {
     if (PUBLIC_ROUTES.has(requestKey(request))) return next();
     try {
       requireAuthenticated(request);
@@ -136,9 +167,34 @@ export async function buildApp(options = {}) {
           "Change the temporary password before using the workspace.",
         );
       }
-      if (!SAFE_METHODS.has(request.method)) {
+      const safeMethod = SAFE_METHODS.has(request.method);
+      if (!safeMethod) {
         verifyRequestOrigin(request, config);
         verifyCsrf(request);
+      }
+      const sameOriginSignal = request.get("sec-fetch-site") === "same-origin"
+        || request.get("origin") === config.origin;
+      if (!safeMethod || sameOriginSignal) {
+        const sessionId = request.session.id;
+        const startedAt = request.startedAt;
+        response.once("finish", () => {
+          try {
+            if (response.statusCode < 400) {
+              touchSession(db, sessionId, startedAt);
+            }
+          } catch (error) {
+            if (config.logLevel !== "silent") {
+              console.error(JSON.stringify({
+                level: "error",
+                requestId: request.id,
+                method: request.method,
+                path: request.path,
+                code: "session_touch_failed",
+                stack: config.production ? undefined : error.stack,
+              }));
+            }
+          }
+        });
       }
       return next();
     } catch (error) {
@@ -196,6 +252,10 @@ export async function buildApp(options = {}) {
       code = "internal_error";
       message = "The request could not be completed.";
       details = undefined;
+    }
+
+    if (request.invalidSessionCookie && !response.headersSent) {
+      response.clearCookie(SESSION_COOKIE, sessionCookieOptions(config));
     }
 
     if (statusCode >= 500 && config.logLevel !== "silent") {

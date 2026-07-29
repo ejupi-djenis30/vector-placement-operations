@@ -14,9 +14,16 @@
 ## What VECTOR does
 
 - Tracks cohorts, students, host organisations, placement periods and tutor assignments.
-- Records hours, check-ins and required placement documents.
-- Blocks completion until verified hours, a check-in and the required evidence are present.
+- Shows cohort coverage by period, including students without a placement and overlapping
+  placement conflicts.
+- Records hours, check-ins and evidence against a school-managed placement programme.
+- Turns overdue evidence, pending hour reviews, placement dates and missing tutor assignments into
+  one role-scoped attention inbox.
+- Lets coordinators publish immutable programme versions with default hours, minimum check-ins and
+  evidence requirements.
+- Blocks completion until the selected programme's verified hours, check-ins and evidence are ready.
 - Gives administrators, coordinators, tutors and viewers explicit, scoped permissions.
+- Expires inactive sessions on the server for safer use on shared school computers.
 - Imports validated CSV files atomically and exports only data visible to the current role.
 - Pages large collections with bounded search and confidential, view-bound cursors.
 - Records append-only audit events without copying personal fields into audit metadata.
@@ -44,12 +51,15 @@ administrative boundaries, run separate installations.
 
 ## Start with Docker Compose
 
-1. Copy `.env.example` to `.env`.
-2. Set a strong, unique bootstrap password and the public origin.
+1. Copy `.env.example` to `.env` and fill every blank bootstrap value.
+2. Run the one-shot initializer, then remove `VECTOR_BOOTSTRAP_ADMIN_PASSWORD` from `.env`.
 3. Start the service.
 
 ```bash
-docker compose up --build -d
+docker compose build --pull
+docker compose run --rm --no-deps vector
+# Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from .env after the expected initialization message.
+docker compose up -d
 docker compose ps
 ```
 
@@ -66,11 +76,14 @@ cp .env.example .env
 # Edit .env: set the real origin, IANA time zone and a unique bootstrap password.
 npm ci
 npm start
+# Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from .env after the expected initialization message.
+npm start
 ```
 
-`npm start` loads `.env` with Node's built-in environment-file support. A new database will not
-bootstrap without `VECTOR_BOOTSTRAP_ADMIN_PASSWORD`. Review [.env.example](.env.example) for every
-runtime setting. Synthetic example records are disabled in production unless
+`npm start` loads `.env` with Node's built-in environment-file support. A new production database
+will not bootstrap without `VECTOR_BOOTSTRAP_ADMIN_PASSWORD`; initialization then exits before
+opening the HTTP listener so the secret can be removed. Review [.env.example](.env.example) for
+every runtime setting. Synthetic example records are disabled in production unless
 `VECTOR_SEED_SYNTHETIC=true` is set explicitly.
 
 Useful operator commands:
@@ -110,9 +123,10 @@ npm run check:release
 npm run check:audit
 ```
 
-The suite covers authentication and CSRF, role scoping, confidential cursor pagination, atomic
-audit writes, placement readiness, governed retention, safe imports/exports, session-free backup
-and verified restore, deterministic release archives and responsive browser behaviour.
+The suite covers authentication, inactivity expiry and CSRF, role-scoped cohort coverage,
+confidential cursor pagination, atomic audit writes, versioned programme readiness, governed
+retention, safe imports/exports, session-free backup and verified restore, deterministic release
+archives and responsive browser behaviour.
 
 ## Releases
 

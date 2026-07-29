@@ -52,6 +52,36 @@ test("production configuration requires an origin and bounded proxy trust", () =
   assert.equal(config.cookieSecure, true);
 });
 
+test("session inactivity policy is bounded by the absolute lifetime", () => {
+  const defaults = loadConfig({ NODE_ENV: "test" });
+  assert.equal(defaults.sessionHours, 12);
+  assert.equal(defaults.sessionIdleMinutes, 45);
+
+  const equalLimit = loadConfig({
+    NODE_ENV: "test",
+    VECTOR_SESSION_HOURS: "1",
+    VECTOR_SESSION_IDLE_MINUTES: "60",
+  });
+  assert.equal(equalLimit.sessionIdleMinutes, 60);
+
+  assert.throws(
+    () => loadConfig({ NODE_ENV: "test", VECTOR_SESSION_IDLE_MINUTES: "4" }),
+    /integer between 5 and 10080/,
+  );
+  assert.throws(
+    () => loadConfig({ NODE_ENV: "test", VECTOR_SESSION_IDLE_MINUTES: "5.5" }),
+    /integer between 5 and 10080/,
+  );
+  assert.throws(
+    () => loadConfig({
+      NODE_ENV: "test",
+      VECTOR_SESSION_HOURS: "1",
+      VECTOR_SESSION_IDLE_MINUTES: "61",
+    }),
+    /less than or equal to VECTOR_SESSION_HOURS/,
+  );
+});
+
 test("password verification accepts a valid scrypt hash and rejects malformed cost parameters", async () => {
   const hash = await hashPassword("a-strong-test-password-2026");
   assert.equal(await verifyPassword("a-strong-test-password-2026", hash), true);

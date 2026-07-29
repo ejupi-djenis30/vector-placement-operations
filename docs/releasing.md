@@ -100,7 +100,7 @@ node scripts/release-cli.mjs compare `
 ## Rehearse on GitHub
 
 Run the **Release readiness** workflow manually. Set `expected_tag` to the intended stable tag, such
-as `v3.0.0`. A workflow-dispatch rehearsal builds and verifies the candidate but cannot enter the
+as `v3.3.0`. A workflow-dispatch rehearsal builds and verifies the candidate but cannot enter the
 tag-only publication job.
 
 Download the `vector-release-candidate` artifact and verify and accept it again:
@@ -122,17 +122,17 @@ tagger_email="$(node -p "JSON.parse(require('fs').readFileSync('release-policy.j
 commit="$(git rev-parse HEAD)"
 
 node scripts/release-cli.mjs tag-preflight \
-  --tag v3.0.0 \
+  --tag v3.3.0 \
   --commit "$commit" \
   --tagger-name "$tagger_name" \
   --tagger-email "$tagger_email"
 
 git -c user.name="$tagger_name" \
   -c user.email="$tagger_email" \
-  tag -s v3.0.0 "$commit" -m "VECTOR 3.0.0"
+  tag -s v3.3.0 "$commit" -m "VECTOR 3.3.0"
 
-node scripts/release-cli.mjs tag-verify --tag v3.0.0 --commit "$commit"
-git push origin refs/tags/v3.0.0:refs/tags/v3.0.0
+node scripts/release-cli.mjs tag-verify --tag v3.3.0 --commit "$commit"
+git push origin refs/tags/v3.3.0:refs/tags/v3.3.0
 ```
 
 The preflight rejects `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` because they override Git's
@@ -158,7 +158,7 @@ Verify checksums and provenance before extraction:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify vector-self-hosted-3.0.0.tar.gz \
+gh attestation verify vector-self-hosted-3.3.0.tar.gz \
   --repo ejupi-djenis30/vector-placement-operations \
   --signer-workflow ejupi-djenis30/vector-placement-operations/.github/workflows/release.yml
 ```

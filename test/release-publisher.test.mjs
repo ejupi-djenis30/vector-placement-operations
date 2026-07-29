@@ -35,7 +35,7 @@ class FakeGitHub {
   async tagObject() {
     return {
       sha: TAG_SHA,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
       tagger: { name: this.taggerName, email: this.taggerEmail },
       verification: { verified: this.verified },
       object: { type: "commit", sha: COMMIT },
@@ -107,7 +107,7 @@ async function fixture(context) {
   await buildReleaseCandidate({
     output: directory,
     sourceCommit: COMMIT,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     verifySource: false,
   });
   return directory;
@@ -116,7 +116,7 @@ async function fixture(context) {
 function publish(directory, client) {
   return publishReleaseCandidate({
     directory,
-    tag: "v3.0.0",
+    tag: "v3.3.0",
     repository: "ejupi-djenis30/vector-placement-operations",
     defaultBranch: "main",
     sourceCommit: COMMIT,
@@ -148,7 +148,7 @@ test("GitHub client uploads a file with the release command's length-aware trans
   await client.uploadAsset(
     {
       id: 7,
-      tag_name: "v3.0.0",
+      tag_name: "v3.3.0",
       upload_url:
         "https://uploads.github.com/repos/ejupi-djenis30/vector-placement-operations/releases/7/assets{?name,label}",
     },
@@ -159,7 +159,7 @@ test("GitHub client uploads a file with the release command's length-aware trans
     args: [
       "release",
       "upload",
-      "v3.0.0",
+      "v3.3.0",
       path,
       "--repo",
       "ejupi-djenis30/vector-placement-operations",
@@ -240,7 +240,7 @@ test("publisher refuses a foreign draft", async (context) => {
   const client = new FakeGitHub();
   client.release = {
     id: 7,
-    tag_name: "v3.0.0",
+    tag_name: "v3.3.0",
     target_commitish: COMMIT,
     name: "Foreign draft",
     body: "Unrelated body",
@@ -266,7 +266,7 @@ test("publisher rejects non-tag and disabled publication contexts before GitHub 
   await assert.rejects(
     () => publishReleaseCandidate({
       directory,
-      tag: "v3.0.0",
+      tag: "v3.3.0",
       repository: "ejupi-djenis30/vector-placement-operations",
       defaultBranch: "main",
       sourceCommit: COMMIT,
