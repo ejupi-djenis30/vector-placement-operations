@@ -1,2 +1,4 @@
 User-agent: *
-Allow: /
+Allow: /vector-placement-operations/
+
+Sitemap: https://ejupi-djenis30.github.io/vector-placement-operations/sitemap.xml

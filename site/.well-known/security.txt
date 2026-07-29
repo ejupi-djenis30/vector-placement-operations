@@ -1,0 +1,5 @@
+Contact: https://github.com/ejupi-djenis30/vector-placement-operations/security/advisories/new
+Expires: 2027-07-29T00:00:00Z
+Preferred-Languages: en
+Canonical: https://ejupi-djenis30.github.io/vector-placement-operations/.well-known/security.txt
+Policy: https://github.com/ejupi-djenis30/vector-placement-operations/security/policy
