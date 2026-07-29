@@ -47,7 +47,7 @@
         <div class="hero-copy">
           <p class="eyebrow"><span>01</span> Self-hosted placement operations</p>
           <h1>Keep each placement<br /><em>accountable.</em></h1>
-          <p class="lead">Assign students and hosts, verify hours and check-ins, and close every placement with the evidence your process requires.</p>
+          <p class="lead">Plan cohort coverage, assign students and hosts, verify hours and check-ins, and close every placement with the evidence your process requires.</p>
           <div class="hero-actions">
             <a class="button button-primary" href="app/" data-workspace-link>Open workspace <span aria-hidden="true">↗</span></a>
             <a class="button button-quiet" href="#self-host">Read the setup path</a>
@@ -75,8 +75,8 @@
         <div class="section-label"><span>02</span> The operating view</div>
         <h2 id="workflow-title">One workflow.<br />Each decision traceable.</h2>
         <div class="workflow-grid">
-          <article><span>01</span><h3>Set the placement up.</h3><p>Record who is involved, where the work happens, its dates and the expected hours.</p></article>
-          <article><span>02</span><h3>Follow the work.</h3><p>Verify time, record check-ins and keep required evidence beside the placement it belongs to.</p></article>
+          <article><span>01</span><h3>Plan the coverage.</h3><p>See who still needs a placement by cohort and period, then record where the work happens and when.</p></article>
+          <article><span>02</span><h3>Follow the work.</h3><p>Verify time, record check-ins and track each required evidence item against the placement it belongs to.</p></article>
           <article><span>03</span><h3>Close the record.</h3><p>VECTOR blocks completion until the required hours, follow-up and documents are in place.</p></article>
         </div>
       </section>
@@ -102,7 +102,7 @@
         <div class="self-host-copy">
           <p>VECTOR is designed to be run by the institution that uses it. The browser workspace talks to your own Node and SQLite installation; GitHub Pages only publishes this product presentation.</p>
           <p>Before production use, your institution remains responsible for its legal basis, retention schedule, minimisation, DPIA and transport security.</p>
-          <div class="code-strip" aria-label="Self-hosting commands"><code>cp .env.example .env</code><code>docker compose up -d</code><code>open /app/</code></div>
+          <div class="code-strip" aria-label="Self-hosting commands"><code>cp .env.example .env</code><code>docker compose run --rm --no-deps vector</code><code>remove bootstrap secret · docker compose up -d</code></div>
           <a class="text-link" href="https://github.com/ejupi-djenis30/vector-placement-operations#readme">Read the self-hosting guide <span aria-hidden="true">↗</span></a>
         </div>
       </section>

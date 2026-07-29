@@ -87,3 +87,65 @@ test("CI installs actionlint from an exact checksummed release", async () => {
     assert.ok(workflow.includes(token), `ci.yml is missing ${token}`);
   }
 });
+
+test("production container smokes enforce one-shot bootstrap secret removal", async () => {
+  const initializationMessage =
+    "VECTOR initialization completed. Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from the environment and restart VECTOR before serving users.";
+  const retainedSecretMessage =
+    "VECTOR_BOOTSTRAP_ADMIN_PASSWORD must be removed after initialization. Remove it from the environment and restart VECTOR.";
+  for (const [name, url] of [
+    ["ci.yml", ciWorkflowUrl],
+    ["release.yml", releaseWorkflowUrl],
+  ]) {
+    const workflow = (await readFile(url, "utf8")).replaceAll("\r\n", "\n");
+    const initialization = workflow.indexOf('initialization_output="$(');
+    const retainedSecret = workflow.indexOf('retained_secret_output="$(', initialization);
+    const servingStartup = workflow.indexOf("docker run --detach", retainedSecret);
+    const readiness = workflow.indexOf("/api/health/ready", servingStartup);
+
+    assert.ok(initialization >= 0, `${name} is missing the initialization phase.`);
+    assert.ok(
+      retainedSecret > initialization,
+      `${name} must reject a retained secret after initialization.`,
+    );
+    assert.ok(
+      servingStartup > retainedSecret,
+      `${name} must start the serving container only after both bootstrap rejections.`,
+    );
+    assert.ok(
+      readiness > servingStartup,
+      `${name} must check readiness only after starting without the secret.`,
+    );
+    assert.ok(workflow.includes(initializationMessage), `${name} is missing the initialization message.`);
+    assert.ok(workflow.includes(retainedSecretMessage), `${name} is missing the retained-secret message.`);
+    assert.ok(
+      workflow.includes('[[ "${initialization_status}" == "0" ]]'),
+      `${name} must reject a successful initialization process.`,
+    );
+    assert.ok(
+      workflow.includes('[[ "${retained_secret_status}" == "0" ]]'),
+      `${name} must reject a successful retained-secret process.`,
+    );
+    assert.equal(
+      (workflow.match(/"\$\{runtime_args\[@\]\}"/g) ?? []).length,
+      3,
+      `${name} must use the same hardened runtime and volume for both probes and serving.`,
+    );
+    assert.equal(
+      (workflow.match(/"\$\{bootstrap_args\[@\]\}"/g) ?? []).length,
+      2,
+      `${name} must pass bootstrap credentials only to the two expected failures.`,
+    );
+    const servingBlock = workflow.slice(servingStartup, readiness);
+    assert.equal(
+      servingBlock.includes("bootstrap_args"),
+      false,
+      `${name} must not retain bootstrap credentials for the serving startup.`,
+    );
+    assert.equal(
+      servingBlock.includes("VECTOR_BOOTSTRAP_ADMIN_PASSWORD"),
+      false,
+      `${name} must not pass the bootstrap secret to the serving startup.`,
+    );
+  }
+});

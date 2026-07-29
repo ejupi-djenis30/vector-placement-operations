@@ -27,7 +27,9 @@ import {
   createStudent,
   exportAuditEvents,
   getPlacement,
+  listAttentionItems,
   listAuditEvents,
+  listCoverage,
   listHosts,
   listLookups,
   listPlacements,
@@ -51,6 +53,15 @@ import { AppError, notFound } from "./errors.mjs";
 import { DUMMY_PASSWORD_HASH, verifyPassword } from "./password.mjs";
 import { exportData, importCsv, importTemplate } from "./portability.mjs";
 import {
+  createProgramme,
+  listProgrammes,
+  listProgrammeVersions,
+  publishProgrammeVersion,
+  updateProgramme,
+} from "./programmes.mjs";
+import {
+  AttentionQuery,
+  AttentionResponse,
   AuditResponse,
   AuditExportQuery,
   AuditQuery,
@@ -62,6 +73,8 @@ import {
   CollectionQuery,
   CohortBody,
   CohortPatchBody,
+  CoverageQuery,
+  CoverageResponse,
   DashboardResponse,
   DimensionsResponse,
   DocumentPatchBody,
@@ -92,6 +105,12 @@ import {
   PlacementPatchBody,
   PlacementListResponse,
   PlacementQuery,
+  ProgrammeCreateBody,
+  ProgrammePatchBody,
+  ProgrammePublishBody,
+  ProgrammePublishResponse,
+  ProgrammesResponse,
+  ProgrammeVersionsResponse,
   ReferenceDataResponse,
   ReferenceParams,
   ReferenceQuery,
@@ -129,6 +148,10 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: true,
   handler: (request, response) => {
+    if (request.invalidSessionCookie) {
+      const { config } = request.app.locals.vector;
+      response.clearCookie("vector_session", sessionCookieOptions(config));
+    }
     response.status(429).json({
       error: {
         code: "rate_limited",
@@ -256,7 +279,7 @@ export function registerApiRoutes(app, services = {}) {
   app.post("/api/auth/login", loginLimiter, async (request, response) => {
     verifyRequestOrigin(request, config);
     const input = body(LoginBody, request);
-    deleteExpiredSessions(db);
+    deleteExpiredSessions(db, config.sessionIdleMinutes);
     const row = findUserForLogin(db, input.email);
     const passwordMatches = await passwordVerifier(
       input.password,
@@ -366,6 +389,24 @@ export function registerApiRoutes(app, services = {}) {
     json(response, DashboardResponse, readDashboard(db, request.user));
   });
 
+  app.get("/api/attention", (request, response) => {
+    const filters = query(AttentionQuery, request);
+    json(
+      response,
+      AttentionResponse,
+      listAttentionItems(db, request.user, filters, cursorCodec),
+    );
+  });
+
+  app.get("/api/coverage", (request, response) => {
+    const filters = query(CoverageQuery, request);
+    json(
+      response,
+      CoverageResponse,
+      listCoverage(db, request.user, filters, cursorCodec),
+    );
+  });
+
   app.get("/api/placements", (request, response) => {
     const filters = query(PlacementQuery, request);
     json(
@@ -411,6 +452,57 @@ export function registerApiRoutes(app, services = {}) {
       response,
       LookupResponse,
       listLookups(db, request.user, resource, filters, cursorCodec),
+    );
+  });
+
+  app.get("/api/programmes", (request, response) => {
+    json(response, ProgrammesResponse, listProgrammes(db, request.user));
+  });
+
+  app.get("/api/programmes/:id/versions", (request, response) => {
+    const { id } = params(IdParams, request);
+    json(
+      response,
+      ProgrammeVersionsResponse,
+      listProgrammeVersions(db, request.user, id),
+    );
+  });
+
+  app.post("/api/programmes", (request, response) => {
+    const result = createProgramme(
+      db,
+      request.user,
+      body(ProgrammeCreateBody, request),
+      request.id,
+    );
+    json(response, IdResponse, { id: result.programmeId }, 201);
+  });
+
+  app.patch("/api/programmes/:id", (request, response) => {
+    const { id } = params(IdParams, request);
+    const revision = updateProgramme(
+      db,
+      request.user,
+      id,
+      body(ProgrammePatchBody, request),
+      request.id,
+    );
+    json(response, IdRevisionResponse, { id, revision });
+  });
+
+  app.post("/api/programmes/:id/versions", (request, response) => {
+    const { id } = params(IdParams, request);
+    json(
+      response,
+      ProgrammePublishResponse,
+      publishProgrammeVersion(
+        db,
+        request.user,
+        id,
+        body(ProgrammePublishBody, request),
+        request.id,
+      ),
+      201,
     );
   });
 
@@ -525,14 +617,19 @@ export function registerApiRoutes(app, services = {}) {
 
   app.post("/api/placements/:id/documents", (request, response) => {
     const placement = params(IdParams, request);
-    const id = addDocument(
+    const result = addDocument(
       db,
       request.user,
       placement.id,
       body(DocumentBody, request),
       request.id,
     );
-    json(response, IdResponse, { id }, 201);
+    json(
+      response,
+      IdRevisionResponse,
+      { id: result.id, revision: result.revision },
+      result.created ? 201 : 200,
+    );
   });
 
   app.patch("/api/placements/:placementId/time-entries/:entryId", (request, response) => {

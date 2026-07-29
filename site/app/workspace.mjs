@@ -5,6 +5,19 @@ const state = {
   branding: null,
   session: null,
   dashboard: null,
+  attention: [],
+  attentionNextCursor: null,
+  attentionQuery: "",
+  attentionCategory: "all",
+  coverage: [],
+  coverageSummary: { total: 0, unplaced: 0, placed: 0, conflict: 0 },
+  coverageNextCursor: null,
+  coverageError: "",
+  coverageReference: { cohorts: [], periods: [] },
+  coverageQuery: "",
+  coverageStatus: "all",
+  coverageCohortId: "",
+  coveragePeriodId: "",
   placements: [],
   placementsNextCursor: null,
   overviewPlacements: [],
@@ -15,6 +28,7 @@ const state = {
   reference: { cohorts: [], periods: [], tutors: [] },
   referenceNextCursor: { cohorts: null, periods: null, tutors: null },
   referenceQuery: { cohorts: "", periods: "", tutors: "" },
+  programmes: [],
   audit: [],
   auditNextCursor: null,
   auditFilters: { action: "", actorId: "", fromDate: "", toDate: "" },
@@ -30,6 +44,8 @@ const state = {
 };
 
 const pagedRequests = {
+  attention: { generation: 0, controller: null },
+  coverage: { generation: 0, controller: null },
   placements: { generation: 0, controller: null },
   students: { generation: 0, controller: null },
   hosts: { generation: 0, controller: null },
@@ -76,11 +92,21 @@ function canWrite() {
   return ["school_admin", "coordinator", "tutor"].includes(state.session?.user?.role);
 }
 
+function canViewCoverage() {
+  const user = state.session?.user;
+  return ["school_admin", "coordinator"].includes(user?.role)
+    || (user?.role === "viewer" && user.dataScope === "school");
+}
+
 function canManagePeople() {
   return ["school_admin", "coordinator"].includes(state.session?.user?.role);
 }
 
 function canManagePlacement() {
+  return ["school_admin", "coordinator"].includes(state.session?.user?.role);
+}
+
+function canManageProgrammes() {
   return ["school_admin", "coordinator"].includes(state.session?.user?.role);
 }
 
@@ -170,6 +196,7 @@ async function request(path, options = {}) {
     error.details = payload?.error?.details;
     error.status = response.status;
     if (error.code === "authentication_required" && path !== "/auth/login" && state.session?.authenticated) {
+      resetCoverageSessionState();
       state.session = null;
       window.setTimeout(() => {
         loginScreen();
@@ -248,6 +275,29 @@ function brandImage() {
   return image;
 }
 
+async function loadAllActiveCoverageReference(resource) {
+  const items = [];
+  const seenCursors = new Set();
+  let cursor = null;
+  do {
+    const result = await request(`/reference-data/${resource}?${pageQueryParams({
+      limit: 100,
+      cursor,
+      query: "",
+      active: "true",
+    })}`);
+    items.push(...result.items);
+    cursor = result.nextCursor;
+    if (cursor) {
+      if (seenCursors.has(cursor)) {
+        throw new Error(`The active ${resource} cursor repeated before the list completed.`);
+      }
+      seenCursors.add(cursor);
+    }
+  } while (cursor);
+  return items;
+}
+
 async function loadWorkspaceData() {
   Object.values(pagedRequests).forEach((tracker) => {
     tracker.controller?.abort();
@@ -256,19 +306,27 @@ async function loadWorkspaceData() {
   const tasks = [
     request("/dashboard"),
     request(`/placements?${pageQueryParams({ limit: 6, query: "", status: "all" })}`),
+    request(`/attention?${pageQueryParams({ limit: 50, query: state.attentionQuery, category: state.attentionCategory })}`),
     request(`/placements?${pageQueryParams({ limit: 50, query: state.placementQuery, status: state.placementStatus })}`),
     request(`/students?${pageQueryParams({ limit: 50, query: state.studentQuery, active: state.studentActive })}`),
     request(`/hosts?${pageQueryParams({ limit: 50, query: state.hostQuery, active: state.hostActive })}`),
     request(`/reference-data/cohorts?${pageQueryParams({ limit: 100, query: state.referenceQuery.cohorts, active: "all" })}`),
     request(`/reference-data/periods?${pageQueryParams({ limit: 100, query: state.referenceQuery.periods, active: "all" })}`),
     request(`/reference-data/tutors?${pageQueryParams({ limit: 100, query: state.referenceQuery.tutors, active: "all" })}`),
+    request("/programmes"),
   ];
+  if (canViewCoverage()) {
+    tasks.push(loadAllActiveCoverageReference("cohorts"));
+    tasks.push(loadAllActiveCoverageReference("periods"));
+  }
   if (canAudit()) tasks.push(request(`/audit?${auditQueryParams({ limit: 50 })}`));
   if (canManageBranding()) tasks.push(request("/users"));
   const results = await Promise.all(tasks);
   state.dashboard = results[0];
   state.overviewPlacements = results[1].items;
-  const [placements, students, hosts, cohorts, periods, tutors] = results.slice(2, 8);
+  state.attention = results[2].items;
+  state.attentionNextCursor = results[2].nextCursor;
+  const [placements, students, hosts, cohorts, periods, tutors, programmes] = results.slice(3, 10);
   state.placements = placements.items;
   state.placementsNextCursor = placements.nextCursor;
   state.students = students.items;
@@ -277,7 +335,19 @@ async function loadWorkspaceData() {
   state.hostsNextCursor = hosts.nextCursor;
   state.reference = { cohorts: cohorts.items, periods: periods.items, tutors: tutors.items };
   state.referenceNextCursor = { cohorts: cohorts.nextCursor, periods: periods.nextCursor, tutors: tutors.nextCursor };
-  let offset = 8;
+  state.programmes = programmes.items;
+  let offset = 10;
+  if (canViewCoverage()) {
+    state.coverageReference = {
+      cohorts: results[offset++],
+      periods: results[offset++],
+    };
+    ensureCoverageDefaults();
+    await loadCoverage();
+  } else {
+    state.coverageReference = { cohorts: [], periods: [] };
+    resetCoverageState();
+  }
   if (canAudit()) {
     const auditResult = results[offset++];
     state.audit = auditResult.items;
@@ -289,12 +359,105 @@ async function loadWorkspaceData() {
   state.users = canManageBranding() ? results[offset]?.items ?? [] : [];
 }
 
-function pageQueryParams({ limit = 50, cursor, query = "", status, active } = {}) {
+function pageQueryParams({
+  limit = 50,
+  cursor,
+  query = "",
+  status,
+  active,
+  category,
+  cohortId,
+  periodId,
+} = {}) {
   const params = new URLSearchParams({ limit: String(limit), query });
   if (cursor) params.set("cursor", cursor);
   if (status) params.set("status", status);
   if (active) params.set("active", active);
+  if (category) params.set("category", category);
+  if (cohortId) params.set("cohortId", cohortId);
+  if (periodId) params.set("periodId", periodId);
   return params.toString();
+}
+
+function resetCoverageState(error = "") {
+  state.coverage = [];
+  state.coverageSummary = { total: 0, unplaced: 0, placed: 0, conflict: 0 };
+  state.coverageNextCursor = null;
+  state.coverageError = error;
+}
+
+function resetCoverageSessionState() {
+  const tracker = pagedRequests.coverage;
+  tracker.controller?.abort();
+  tracker.controller = null;
+  tracker.generation += 1;
+  state.coverageReference = { cohorts: [], periods: [] };
+  state.coverageQuery = "";
+  state.coverageStatus = "all";
+  state.coverageCohortId = "";
+  state.coveragePeriodId = "";
+  resetCoverageState();
+}
+
+function ensureCoverageDefaults() {
+  const activeCohorts = state.coverageReference.cohorts.filter((item) => item.active);
+  const activePeriods = state.coverageReference.periods.filter((item) => item.active);
+  if (!activeCohorts.some((item) => item.id === state.coverageCohortId)) {
+    state.coverageCohortId = activeCohorts[0]?.id ?? "";
+  }
+  if (!activePeriods.some((item) => item.id === state.coveragePeriodId)) {
+    state.coveragePeriodId = activePeriods[0]?.id ?? "";
+  }
+  if (!state.coverageCohortId || !state.coveragePeriodId) resetCoverageState();
+  return { activeCohorts, activePeriods };
+}
+
+function coverageRequestIsCurrent(snapshot, generation) {
+  return generation === pagedRequests.coverage.generation
+    && snapshot.cohortId === state.coverageCohortId
+    && snapshot.periodId === state.coveragePeriodId
+    && snapshot.status === state.coverageStatus
+    && snapshot.query === state.coverageQuery;
+}
+
+async function loadCoverage({ append = false } = {}) {
+  const tracker = pagedRequests.coverage;
+  tracker.controller?.abort();
+  tracker.controller = new AbortController();
+  const generation = ++tracker.generation;
+  const snapshot = {
+    cohortId: state.coverageCohortId,
+    periodId: state.coveragePeriodId,
+    status: state.coverageStatus,
+    query: state.coverageQuery,
+    cursor: append ? state.coverageNextCursor : null,
+  };
+  if (!snapshot.cohortId || !snapshot.periodId) {
+    resetCoverageState();
+    return false;
+  }
+  if (append && !snapshot.cursor) return false;
+  try {
+    const result = await request(`/coverage?${pageQueryParams({ limit: 50, ...snapshot })}`, {
+      signal: tracker.controller.signal,
+    });
+    if (!coverageRequestIsCurrent(snapshot, generation)) return false;
+    state.coverage = append ? [...state.coverage, ...result.items] : result.items;
+    state.coverageSummary = result.summary;
+    state.coverageNextCursor = result.nextCursor;
+    state.coverageError = "";
+    return true;
+  } catch (error) {
+    if (error.name === "AbortError") return false;
+    if (!coverageRequestIsCurrent(snapshot, generation)) return false;
+    if (append && error.code === "invalid_cursor") {
+      state.coverageNextCursor = null;
+      flash("The coverage page cursor expired. The first page has been refreshed.");
+      return loadCoverage();
+    }
+    resetCoverageState(error.message);
+    throw error;
+  }
 }
 
 async function loadPlacements({ append = false } = {}) {
@@ -320,6 +483,40 @@ async function loadPlacements({ append = false } = {}) {
       state.placementsNextCursor = null;
       flash("The placement page cursor expired. The first page has been refreshed.");
       return loadPlacements();
+    }
+    throw error;
+  }
+}
+
+async function loadAttention({ append = false } = {}) {
+  const tracker = pagedRequests.attention;
+  tracker.controller?.abort();
+  tracker.controller = new AbortController();
+  const generation = ++tracker.generation;
+  const snapshot = {
+    query: state.attentionQuery,
+    category: state.attentionCategory,
+    cursor: append ? state.attentionNextCursor : null,
+  };
+  if (append && !snapshot.cursor) return false;
+  try {
+    const result = await request(`/attention?${pageQueryParams({ limit: 50, ...snapshot })}`, {
+      signal: tracker.controller.signal,
+    });
+    if (
+      generation !== tracker.generation
+      || snapshot.query !== state.attentionQuery
+      || snapshot.category !== state.attentionCategory
+    ) return false;
+    state.attention = append ? [...state.attention, ...result.items] : result.items;
+    state.attentionNextCursor = result.nextCursor;
+    return true;
+  } catch (error) {
+    if (error.name === "AbortError") return false;
+    if (append && error.code === "invalid_cursor") {
+      state.attentionNextCursor = null;
+      flash("The attention page cursor expired. The first page has been refreshed.");
+      return loadAttention();
     }
     throw error;
   }
@@ -490,7 +687,9 @@ function loginScreen() {
     button.disabled = true;
     button.textContent = "Signing in…";
     try {
-      state.session = await request("/auth/login", { method: "POST", body: { email: email.value, password: password.value } });
+      const session = await request("/auth/login", { method: "POST", body: { email: email.value, password: password.value } });
+      resetCoverageSessionState();
+      state.session = session;
       if (state.session.user?.mustChangePassword) {
         forcedPasswordScreen();
         flash("Set a permanent password before opening the workspace.");
@@ -552,6 +751,7 @@ function forcedPasswordScreen() {
       method: "POST",
       body: { currentPassword: currentPassword.value, newPassword: newPassword.value },
     });
+    resetCoverageSessionState();
     state.session = null;
     loginScreen();
     flash("Password changed. Sign in with the new password.");
@@ -577,6 +777,7 @@ function navButton(view, icon, label) {
     state.selectedPlacement = null;
     renderWorkspace();
     resetPageScroll();
+    document.querySelector(".view-header h1")?.focus();
   });
   return button;
 }
@@ -585,12 +786,18 @@ function renderWorkspace() {
   app.className = "workspace-shell";
   const user = state.session.user;
   const sidebar = element("aside", { class: "workspace-sidebar" }, [
-    element("a", { class: "brand", href: "../", attrs: { "aria-label": "Back to product page" } }, [brandImage(), text(state.branding.productName)]),
+    element("a", { class: "brand", href: "../", attrs: { "aria-label": "Back to product page" } }, [
+      brandImage(),
+      element("span", { text: state.branding.productName }),
+    ]),
     element("nav", { attrs: { "aria-label": "Workspace navigation" } }, [
       navButton("overview", "▦", "Overview"),
+      navButton("attention", "!", "Attention"),
+      ...(canViewCoverage() ? [navButton("coverage", "▥", "Coverage")] : []),
       navButton("placements", "◫", "Placements"),
       navButton("students", "◎", "Students"),
       navButton("hosts", "◇", "Hosts"),
+      ...(canManageProgrammes() ? [navButton("programmes", "⌘", "Programmes")] : []),
       ...(canAudit() ? [navButton("audit", "≋", "Audit")] : []),
       ...(canManageBranding() ? [navButton("settings", "⚙", "Settings")] : []),
     ]),
@@ -612,6 +819,7 @@ function renderTopbar() {
   logout.addEventListener("click", async () => {
     try {
       await request("/auth/logout", { method: "POST", body: {} });
+      resetCoverageSessionState();
       state.session = null;
       state.view = "overview";
       loginScreen();
@@ -633,16 +841,19 @@ function viewHeader(eyebrow, heading, description, action = null) {
   return element("header", { class: "view-header" }, [
     element("div", {}, [
       element("p", { class: "eyebrow", text: eyebrow }),
-      element("h1", { text: heading }),
+      element("h1", { text: heading, tabIndex: -1 }),
       element("p", { text: description }),
     ]), action,
   ]);
 }
 
 function renderCurrentView() {
+  if (state.view === "attention") return renderAttention();
+  if (state.view === "coverage" && canViewCoverage()) return renderCoverage();
   if (state.view === "placements") return state.selectedPlacement ? renderPlacementDetail() : renderPlacements();
   if (state.view === "students") return renderStudents();
   if (state.view === "hosts") return renderHosts();
+  if (state.view === "programmes") return renderProgrammes();
   if (state.view === "audit") return renderAudit();
   if (state.view === "settings") return renderSettings();
   return renderOverview();
@@ -651,27 +862,542 @@ function renderCurrentView() {
 function renderOverview() {
   const dashboard = state.dashboard;
   const latest = state.overviewPlacements;
+  const attention = dashboard.attention;
   return element("section", {}, [
-    viewHeader("01 / Operating overview", "Keep the next action visible.", "A concise view of the records currently in your permitted scope."),
+    viewHeader("01 / Operating overview", "Know what needs attention next.", "A live, role-scoped view of deadlines, reviews and assignments in this installation."),
     element("div", { class: "metrics-grid", attrs: { "aria-label": "Placement metrics" } }, [
       metric("Placements", dashboard.placements, "in your permitted scope"),
-      metric("In progress", dashboard.active, "active placements"),
-      metric("Needs review", dashboard.review, "waiting for close-out"),
+      metric("In progress", dashboard.active, `${dashboard.review} waiting for close-out`),
+      metric("Needs attention", attention.total, `${attention.overdue} overdue · ${attention.dueSoon} due soon`),
       metric("Hours logged", `${dashboard.completion}%`, `${dashboard.documentGaps} document gap${dashboard.documentGaps === 1 ? "" : "s"}`, true),
     ]),
     element("section", { class: "workspace-card" }, [
       element("div", { class: "card-toolbar" }, [
-        element("strong", { text: "Placement queue" }),
-        element("button", { class: "button-small", type: "button", text: "View all placements", onClick: () => { state.view = "placements"; renderWorkspace(); } }),
+        element("strong", { text: "Needs attention" }),
+        element("button", { class: "button-small", type: "button", text: "Open attention inbox", onClick: () => { state.view = "attention"; renderWorkspace(); document.querySelector(".view-header h1")?.focus(); } }),
+      ]),
+      attention.items.length
+        ? attentionTable(attention.items, { concise: true })
+        : emptyPanel("Nothing needs attention in your scope.", "New deadlines, pending reviews and assignment gaps will appear here."),
+    ]),
+    element("section", { class: "workspace-card" }, [
+      element("div", { class: "card-toolbar" }, [
+        element("strong", { text: "Placement register" }),
+        element("button", { class: "button-small", type: "button", text: "View all placements", onClick: () => { state.view = "placements"; renderWorkspace(); document.querySelector(".view-header h1")?.focus(); } }),
       ]),
       placementTable(latest, { concise: true }),
     ]),
   ]);
 }
 
+function attentionStatusClass(severity) {
+  return statusClass(severity === "overdue" ? "cancelled" : severity === "due_soon" ? "review" : "active");
+}
+
+function attentionTable(rows, { concise = false } = {}) {
+  const headers = concise
+    ? ["Action", "Placement", "Priority", ""]
+    : ["Action", "Student", "Host", "School tutor", "Priority", "Due", ""];
+  const table = element("table", { class: "data-table" });
+  const thead = element("thead");
+  const headerRow = element("tr");
+  headers.forEach((value) => headerRow.append(element("th", { scope: "col", text: value })));
+  thead.append(headerRow);
+  const body = element("tbody");
+  rows.forEach((item) => {
+    const row = element("tr");
+    row.append(element("td", { dataset: { label: "Action" } }, [
+      element("strong", { text: item.title }),
+      element("small", { text: item.detail }),
+    ]));
+    if (concise) {
+      row.append(element("td", { dataset: { label: "Placement" } }, [
+        element("strong", { text: item.studentName }),
+        element("small", { text: `${item.hostName}${item.dueDate ? ` · ${formatDate(item.dueDate)}` : ""}` }),
+      ]));
+    } else {
+      row.append(
+        element("td", { dataset: { label: "Student" } }, [element("strong", { text: item.studentName })]),
+        element("td", { dataset: { label: "Host" } }, [element("strong", { text: item.hostName })]),
+        element("td", { dataset: { label: "School tutor" } }, [element("strong", { text: item.schoolTutorName || "Unassigned" })]),
+      );
+    }
+    row.append(element("td", { dataset: { label: "Priority" } }, [
+      element("span", { class: attentionStatusClass(item.severity), text: titleCase(item.severity) }),
+    ]));
+    if (!concise) {
+      row.append(element("td", { dataset: { label: "Due" }, text: item.dueDate ? formatDate(item.dueDate) : "No fixed date" }));
+    }
+    row.append(element("td", { class: "list-actions" }, [
+      element("button", { class: "row-button", type: "button", text: "Open placement", onClick: () => openPlacement(item.placementId) }),
+    ]));
+    body.append(row);
+  });
+  table.append(thead, body);
+  return table;
+}
+
+function renderAttentionList(card) {
+  card.querySelectorAll(".data-table, .empty-panel, .load-more-row").forEach((node) => node.remove());
+  card.append(state.attention.length
+    ? attentionTable(state.attention)
+    : emptyPanel("No attention items match this view.", "Try a different category or search term."));
+  if (state.attentionNextCursor) {
+    const loadMore = element("button", { class: "button-small", type: "button", text: "Load more attention items" });
+    loadMore.addEventListener("click", async () => {
+      loadMore.disabled = true;
+      card.setAttribute("aria-busy", "true");
+      try {
+        await loadAttention({ append: true });
+        renderAttentionList(card);
+      } catch (error) {
+        flash(error.message, "error");
+        loadMore.disabled = false;
+      } finally {
+        card.removeAttribute("aria-busy");
+      }
+    });
+    card.append(element("div", { class: "card-body load-more-row" }, [loadMore]));
+  }
+}
+
+function renderAttention() {
+  const content = element("section", {}, [
+    viewHeader("Priority inbox", "What needs attention.", "Deadlines, pending reviews, status changes and tutor assignment gaps in your permitted scope."),
+    element("section", { class: "workspace-card" }),
+  ]);
+  const card = content.querySelector(".workspace-card");
+  const search = element("input", {
+    type: "search",
+    value: state.attentionQuery,
+    placeholder: "Search student, host or tutor",
+    attrs: { "aria-label": "Search attention items" },
+  });
+  let searchTimer = null;
+  search.addEventListener("input", () => {
+    state.attentionQuery = search.value;
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(async () => {
+      const expectedQuery = state.attentionQuery;
+      card.setAttribute("aria-busy", "true");
+      try {
+        await loadAttention();
+        if (state.attentionQuery === expectedQuery) renderAttentionList(card);
+      } catch (error) {
+        flash(error.message, "error");
+      } finally {
+        card.removeAttribute("aria-busy");
+      }
+    }, 250);
+  });
+  const tabs = element("div", { class: "filter-tabs", attrs: { "aria-label": "Attention category filter" } });
+  [["all", "All"], ["evidence", "Evidence"], ["hours", "Hours"], ["status", "Status"], ["assignment", "Assignment"]]
+    .forEach(([category, label]) => {
+      const tab = element("button", {
+        type: "button",
+        text: label,
+        attrs: { "aria-pressed": String(state.attentionCategory === category) },
+      });
+      tab.addEventListener("click", async () => {
+        state.attentionCategory = category;
+        tabs.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", String(button === tab)));
+        card.setAttribute("aria-busy", "true");
+        try {
+          await loadAttention();
+          renderAttentionList(card);
+        } catch (error) {
+          flash(error.message, "error");
+        } finally {
+          card.removeAttribute("aria-busy");
+        }
+      });
+      tabs.append(tab);
+    });
+  card.append(element("div", { class: "card-toolbar" }, [
+    element("label", { class: "search-field" }, [search]),
+    tabs,
+  ]));
+  renderAttentionList(card);
+  return content;
+}
+
 function metric(label, value, detail, accent = false) {
   return element("article", { class: `metric ${accent ? "metric-accent" : ""}` }, [
     element("span", { text: label }), element("strong", { text: String(value) }), element("small", { text: detail }),
+  ]);
+}
+
+function coverageStatusClass(status) {
+  if (status === "placed") return statusClass("active");
+  if (status === "conflict") return statusClass("review");
+  return statusClass("missing");
+}
+
+function renderCoverageMetrics(container) {
+  const summary = state.coverageSummary;
+  container.replaceChildren(
+    metric("Students", summary.total, "in the selected cohort"),
+    metric("Unplaced", summary.unplaced, "need a placement"),
+    metric("Placed", summary.placed, "have one placement"),
+    metric("Conflicts", summary.conflict, "have overlapping placements", true),
+  );
+}
+
+function coverageTable(rows) {
+  const table = element("table", { class: "data-table coverage-table" });
+  table.append(element("caption", { class: "sr-only", text: "Student placement coverage" }));
+  const thead = element("thead");
+  const headerRow = element("tr");
+  ["Student", "External reference", "Coverage", "Placements", "Actions"]
+    .forEach((label) => headerRow.append(element("th", { scope: "col", text: label })));
+  thead.append(headerRow);
+  const body = element("tbody");
+  const selectedPeriod = state.coverageReference.periods.find((item) => item.id === state.coveragePeriodId);
+  rows.forEach((item) => {
+    const row = element("tr", { dataset: { studentId: item.studentId }, tabIndex: -1 });
+    row.append(
+      element("td", { dataset: { label: "Student" } }, [
+        element("strong", { text: item.studentName }),
+        element("small", { text: item.cohortName || "Selected cohort" }),
+      ]),
+      element("td", {
+        dataset: { label: "External reference" },
+        text: item.externalRef || "Not recorded",
+      }),
+      element("td", { dataset: { label: "Coverage" } }, [
+        element("span", { class: coverageStatusClass(item.status), text: titleCase(item.status) }),
+        element("small", {
+          text: `${item.placementCount} placement${item.placementCount === 1 ? "" : "s"}`,
+        }),
+      ]),
+    );
+
+    const placementList = element("div", { class: "coverage-placement-list" });
+    if (!item.placements.length) {
+      placementList.append(element("span", { class: "notice-inline", text: "No placement in this period." }));
+    } else {
+      item.placements.forEach((placement) => {
+        placementList.append(element("div", { class: "coverage-placement" }, [
+          element("strong", { text: placement.hostName }),
+          element("small", {
+            text: `${titleCase(placement.status)} · ${formatDate(placement.startDate)}–${formatDate(placement.endDate)}`,
+          }),
+        ]));
+      });
+      if (item.additionalPlacements) {
+        placementList.append(element("small", {
+          class: "coverage-additional",
+          text: `+${item.additionalPlacements} additional placement${item.additionalPlacements === 1 ? "" : "s"}`,
+        }));
+      }
+    }
+    row.append(element("td", { dataset: { label: "Placements" } }, [placementList]));
+
+    const actions = element("div", { class: "list-actions coverage-actions" });
+    item.placements.forEach((placement, index) => {
+      actions.append(element("button", {
+        class: "row-button",
+        type: "button",
+        text: "Open placement",
+        attrs: {
+          "aria-label": `Open placement ${index + 1} of ${item.placementCount} for ${item.studentName} at ${placement.hostName}, ${formatDate(placement.startDate)} to ${formatDate(placement.endDate)}`,
+        },
+        onClick: () => openPlacement(placement.id),
+      }));
+    });
+    if (item.status === "unplaced" && canManagePlacement() && selectedPeriod) {
+      actions.append(element("button", {
+        class: "row-button",
+        type: "button",
+        text: "New placement",
+        attrs: { "aria-label": `Create placement for ${item.studentName}` },
+        onClick: () => openPlacementForm({
+          student: {
+            id: item.studentId,
+            label: item.studentName,
+            secondary: item.externalRef || item.cohortName,
+          },
+          period: {
+            id: selectedPeriod.id,
+            label: selectedPeriod.name,
+            secondary: `${selectedPeriod.startDate} – ${selectedPeriod.endDate}`,
+          },
+          startDate: selectedPeriod.startDate,
+          endDate: selectedPeriod.endDate,
+        }, { returnView: "coverage" }),
+      }));
+    }
+    if (!actions.childElementCount) {
+      actions.append(element("span", { class: "notice-inline", text: "Read only" }));
+    }
+    row.append(element("td", { class: "list-actions", dataset: { label: "Actions" } }, [actions]));
+    body.append(row);
+  });
+  table.append(thead, body);
+  return table;
+}
+
+function coverageErrorPanel(card) {
+  const retry = element("button", {
+    class: "button-small",
+    type: "button",
+    text: "Retry coverage refresh",
+  });
+  retry.addEventListener("click", async () => {
+    retry.disabled = true;
+    card.setAttribute("aria-busy", "true");
+    try {
+      const loaded = await loadCoverage();
+      if (!loaded) return;
+      const metrics = document.querySelector('[data-coverage-metrics="true"]');
+      if (metrics) renderCoverageMetrics(metrics);
+      renderCoverageList(card);
+      flash("Coverage refreshed.");
+      card.querySelector(".coverage-result-count")?.focus();
+    } catch (error) {
+      renderCoverageList(card);
+      flash(error.message, "error");
+    } finally {
+      card.removeAttribute("aria-busy");
+      retry.disabled = false;
+    }
+  });
+  return element("div", { class: "empty-panel", attrs: { role: "alert" } }, [
+    element("strong", { text: "Coverage could not be loaded." }),
+    element("span", {
+      text: state.coverageError || "The current coverage data is unavailable. Retry the refresh.",
+    }),
+    element("div", { class: "load-more-row coverage-error-actions" }, [retry]),
+  ]);
+}
+
+function renderCoverageList(card, { focusStudentId = null } = {}) {
+  const count = card.querySelector(".coverage-result-count");
+  const results = card.querySelector(".coverage-results");
+  if (state.coverageError) {
+    count.textContent = "Coverage unavailable.";
+    results.replaceChildren(coverageErrorPanel(card));
+    return;
+  }
+  const loaded = state.coverage.length;
+  const matching = state.coverageStatus === "unplaced"
+    ? state.coverageSummary.unplaced
+    : state.coverageStatus === "placed"
+      ? state.coverageSummary.placed
+      : state.coverageStatus === "conflict"
+        ? state.coverageSummary.conflict
+        : state.coverageSummary.total;
+  count.textContent = loaded < matching
+    ? `${loaded} of ${matching} matching students loaded.`
+    : `${matching} matching student${matching === 1 ? "" : "s"}.`;
+  const content = state.coverage.length
+    ? coverageTable(state.coverage)
+    : emptyPanel(
+      "No students match this coverage view.",
+      "Try another status filter, search term, cohort or placement period.",
+    );
+  results.replaceChildren(content);
+  if (state.coverageNextCursor) {
+    const loadMore = element("button", {
+      class: "button-small",
+      type: "button",
+      text: "Load more students",
+    });
+    loadMore.addEventListener("click", async () => {
+      const firstNewIndex = state.coverage.length;
+      loadMore.disabled = true;
+      card.setAttribute("aria-busy", "true");
+      try {
+        const loadedPage = await loadCoverage({ append: true });
+        if (!loadedPage) return;
+        const firstNewStudentId = state.coverage[firstNewIndex]?.studentId ?? null;
+        renderCoverageList(card, { focusStudentId: firstNewStudentId });
+      } catch (error) {
+        renderCoverageList(card);
+        flash(error.message, "error");
+      } finally {
+        card.removeAttribute("aria-busy");
+        loadMore.disabled = false;
+      }
+    });
+    results.append(element("div", { class: "card-body load-more-row" }, [loadMore]));
+  }
+  if (focusStudentId) {
+    const row = [...results.querySelectorAll("[data-student-id]")]
+      .find((candidate) => candidate.dataset.studentId === focusStudentId);
+    row?.focus();
+  }
+}
+
+function renderCoverage() {
+  const { activeCohorts, activePeriods } = ensureCoverageDefaults();
+  const missing = [];
+  if (!activeCohorts.length) missing.push("an active cohort");
+  if (!activePeriods.length) missing.push("an active placement period");
+  if (missing.length) {
+    const action = canManagePeople()
+      ? element("button", {
+        class: "button-small",
+        type: "button",
+        text: "Open reference data",
+        onClick: openReferenceDataManager,
+      })
+      : null;
+    return element("section", {}, [
+      viewHeader(
+        "Cohort coverage",
+        "Prepare the coverage board.",
+        `Coverage needs ${missing.join(" and ")} before students can be compared.`,
+        action,
+      ),
+      element("section", { class: "workspace-card" }, [
+        emptyPanel(
+          "Coverage reference data is incomplete.",
+          canManagePeople()
+            ? "Create or reactivate the missing reference records, then return to this board."
+            : "Ask a coordinator or school administrator to prepare the missing reference records.",
+        ),
+      ]),
+    ]);
+  }
+
+  const cohort = selectInput(
+    activeCohorts.map((item) => [
+      item.id,
+      item.academicYear ? `${item.name} · ${item.academicYear}` : item.name,
+    ]),
+    state.coverageCohortId,
+    "Select cohort",
+  );
+  cohort.id = "coverage-cohort";
+  cohort.required = true;
+  cohort.firstElementChild.disabled = true;
+  const period = selectInput(
+    activePeriods.map((item) => [
+      item.id,
+      `${item.name} · ${formatDate(item.startDate)}–${formatDate(item.endDate)}`,
+    ]),
+    state.coveragePeriodId,
+    "Select placement period",
+  );
+  period.id = "coverage-period";
+  period.required = true;
+  period.firstElementChild.disabled = true;
+  const metrics = element("div", {
+    class: "metrics-grid coverage-metrics",
+    dataset: { coverageMetrics: "true" },
+    attrs: { "aria-label": "Coverage metrics" },
+  });
+  renderCoverageMetrics(metrics);
+
+  const search = element("input", {
+    type: "search",
+    value: state.coverageQuery,
+    placeholder: "Search student or external reference",
+    attrs: { "aria-label": "Search cohort coverage" },
+  });
+  const tabs = element("div", {
+    class: "filter-tabs",
+    attrs: { "aria-label": "Coverage status filter" },
+  });
+  const card = element("section", { class: "workspace-card coverage-results-card" });
+  const resultCount = element("p", {
+    class: "coverage-result-count",
+    tabIndex: -1,
+    attrs: { role: "status", "aria-live": "polite", "aria-atomic": "true" },
+  });
+  const results = element("div", { class: "coverage-results" });
+  card.append(
+    element("div", { class: "card-toolbar" }, [
+      element("label", { class: "search-field" }, [search]),
+      tabs,
+    ]),
+    resultCount,
+    results,
+  );
+
+  const refreshResults = async (focusId = null) => {
+    card.setAttribute("aria-busy", "true");
+    try {
+      const loaded = await loadCoverage();
+      if (!loaded) return;
+      renderCoverageMetrics(metrics);
+      renderCoverageList(card);
+    } catch (error) {
+      renderCoverageMetrics(metrics);
+      renderCoverageList(card);
+      flash(error.message, "error");
+    } finally {
+      card.removeAttribute("aria-busy");
+      if (focusId) document.getElementById(focusId)?.focus();
+    }
+  };
+  cohort.addEventListener("change", () => {
+    state.coverageCohortId = cohort.value;
+    refreshResults("coverage-cohort");
+  });
+  period.addEventListener("change", () => {
+    state.coveragePeriodId = period.value;
+    refreshResults("coverage-period");
+  });
+
+  let searchTimer = null;
+  search.addEventListener("input", () => {
+    state.coverageQuery = search.value;
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(async () => {
+      const expectedQuery = state.coverageQuery;
+      card.setAttribute("aria-busy", "true");
+      try {
+        const loaded = await loadCoverage();
+        if (loaded && state.coverageQuery === expectedQuery) {
+          renderCoverageMetrics(metrics);
+          renderCoverageList(card);
+        }
+      } catch (error) {
+        if (state.coverageQuery === expectedQuery) {
+          renderCoverageMetrics(metrics);
+          renderCoverageList(card);
+        }
+        flash(error.message, "error");
+      } finally {
+        card.removeAttribute("aria-busy");
+      }
+    }, 250);
+  });
+  [["all", "All"], ["unplaced", "Unplaced"], ["placed", "Placed"], ["conflict", "Conflicts"]]
+    .forEach(([status, label]) => {
+      const tab = element("button", {
+        type: "button",
+        text: label,
+        attrs: { "aria-pressed": String(state.coverageStatus === status) },
+      });
+      tab.addEventListener("click", async () => {
+        state.coverageStatus = status;
+        tabs.querySelectorAll("button").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button === tab));
+        });
+        await refreshResults();
+      });
+      tabs.append(tab);
+    });
+
+  const controls = element("section", { class: "workspace-card coverage-controls-card" }, [
+    element("div", { class: "card-body coverage-controls" }, [
+      field("Cohort", cohort),
+      field("Placement period", period),
+    ]),
+  ]);
+  renderCoverageList(card);
+  return element("section", {}, [
+    viewHeader(
+      "Cohort coverage",
+      "Every student, accounted for.",
+      "Compare one cohort with one placement period, resolve gaps and inspect overlapping placements.",
+    ),
+    controls,
+    metrics,
+    card,
   ]);
 }
 
@@ -758,10 +1484,7 @@ function placementTable(rows, { concise = false } = {}) {
   thead.append(headerRow);
   const body = element("tbody");
   rows.forEach((placement) => {
-    const row = element("tr", { dataset: { clickable: "true" }, attrs: { tabIndex: "0" } });
-    const open = () => openPlacement(placement.id);
-    row.addEventListener("click", open);
-    row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } });
+    const row = element("tr");
     row.append(
       element("td", { dataset: { label: "Placement" } }, [element("strong", { text: placement.studentName }), element("small", { text: `${placement.cohortName || "No cohort"} · ${formatDate(placement.startDate)}–${formatDate(placement.endDate)}` })]),
     );
@@ -769,9 +1492,9 @@ function placementTable(rows, { concise = false } = {}) {
     row.append(element("td", { dataset: { label: "Status" } }, [element("span", { class: statusClass(placement.status), text: titleCase(placement.status) })]));
     row.append(element("td", { class: "progress-cell", dataset: { label: "Progress" } }, [progressBar(placement)]));
     if (!concise) row.append(element("td", { dataset: { label: "Documents" }, text: placement.documentGaps ? `${placement.documentGaps} gap${placement.documentGaps === 1 ? "" : "s"}` : "Ready" }));
-    const openButton = element("button", { class: "row-button", type: "button", text: "Open" });
-    openButton.addEventListener("click", (event) => { event.stopPropagation(); open(); });
-    row.append(element("td", { class: "list-actions" }, [openButton]));
+    row.append(element("td", { class: "list-actions" }, [
+      element("button", { class: "row-button", type: "button", text: "Open placement", onClick: () => openPlacement(placement.id) }),
+    ]));
     body.append(row);
   });
   table.append(thead, body);
@@ -802,7 +1525,7 @@ async function openPlacement(id) {
 function renderPlacementDetail() {
   const placement = state.selectedPlacement;
   const frozen = isFrozenPlacement(placement);
-  const back = element("button", { class: "button-small", type: "button", text: "← All placements", onClick: () => { state.selectedPlacement = null; renderWorkspace(); } });
+  const back = element("button", { class: "button-small", type: "button", text: "← All placements", onClick: () => { state.selectedPlacement = null; renderWorkspace(); document.querySelector(".view-header h1")?.focus(); } });
   const mayTransition = canManagePlacement()
     && placementTransitions(placement.status).length
     && (placement.status !== "complete" || isSchoolAdmin());
@@ -826,13 +1549,18 @@ function renderPlacementDetail() {
     activitySection("Check-ins", placement.checkIns, (checkIn) => [
       element("strong", { text: `${titleCase(checkIn.channel)}${checkIn.voided ? " · Voided" : ""}` }),
       element("small", { text: `${formatDateTime(checkIn.occurredAt)} · ${checkIn.summary}` }),
+      ...(checkIn.nextAction ? [element("small", { text: `Next action: ${checkIn.nextAction}` })] : []),
       ...(checkIn.voided && checkIn.voidReason ? [element("small", { text: `Void reason: ${checkIn.voidReason}` })] : []),
       ...(checkIn.canEdit ? [checkInEditButton(placement, checkIn)] : []),
       ...(checkIn.canVoid ? [checkInVoidButton(placement, checkIn)] : []),
     ], !frozen && canWrite() ? () => openCheckInForm(placement) : null),
     activitySection("Documents", placement.documents, (document) => [
       element("strong", { text: `${document.title}${document.superseded ? " · Superseded" : ""}` }),
-      element("small", { text: `${titleCase(document.kind)} · ${titleCase(document.status)}` }),
+      element("small", {
+        text: `${document.requirementLabel ?? titleCase(document.kind)} · ${titleCase(document.status)}`,
+      }),
+      ...(document.dueDate ? [element("small", { text: `Due ${formatDate(document.dueDate)}` })] : []),
+      ...(document.reference ? [element("small", { text: `Reference: ${document.reference}` })] : []),
       ...(document.supersedeReasonCode ? [element("small", { text: `Superseded: ${titleCase(document.supersedeReasonCode)}` })] : []),
       ...(document.canEdit ? [documentEditButton(placement, document)] : []),
       ...(document.canArchive ? [documentArchiveButton(placement, document)] : []),
@@ -854,8 +1582,19 @@ function renderPlacementDetail() {
       element("aside", { class: "detail-side" }, [
         element("h3", { text: "Placement facts" }),
         factsList([
-          ["Student", placement.studentName], ["Host", placement.hostName], ["School tutor", placement.schoolTutorName],
-          ["Host tutor", placement.hostTutorName || "Not recorded"], ["Dates", `${formatDate(placement.startDate)} – ${formatDate(placement.endDate)}`], ["Reference", placement.studentExternalRef || "Not recorded"],
+          ["Student", placement.studentName],
+          ["Student email", placement.studentEmail ? element("a", { href: `mailto:${placement.studentEmail}`, text: placement.studentEmail }) : "Not recorded"],
+          ["Host", placement.hostName],
+          ["Host contact", placement.hostContactName || "Not recorded"],
+          ["Host email", placement.hostContactEmail ? element("a", { href: `mailto:${placement.hostContactEmail}`, text: placement.hostContactEmail }) : "Not recorded"],
+          ["Host phone", placement.hostContactPhone ? element("a", { href: `tel:${placement.hostContactPhone}`, text: placement.hostContactPhone }) : "Not recorded"],
+          ["Host address", placement.hostAddress || "Not recorded"],
+          ["School tutor", placement.schoolTutorName],
+          ["Programme", `${placement.programmeName} · ${placement.programmeCode} · v${placement.programmeVersion}`],
+          ["Host tutor", placement.hostTutorName || "Not recorded"],
+          ["Host tutor email", placement.hostTutorEmail ? element("a", { href: `mailto:${placement.hostTutorEmail}`, text: placement.hostTutorEmail }) : "Not recorded"],
+          ["Dates", `${formatDate(placement.startDate)} – ${formatDate(placement.endDate)}`],
+          ["Reference", placement.studentExternalRef || "Not recorded"],
         ]),
       ]),
     ]),
@@ -864,14 +1603,25 @@ function renderPlacementDetail() {
 
 function factsList(items) {
   const list = element("dl");
-  items.forEach(([label, value]) => list.append(element("div", {}, [element("dt", { text: label }), element("dd", { text: value })])));
+  items.forEach(([label, value]) => {
+    const detail = element("dd");
+    if (value instanceof Node) detail.append(value);
+    else detail.textContent = value;
+    list.append(element("div", {}, [element("dt", { text: label }), detail]));
+  });
   return list;
 }
 
 function readinessCard(readiness) {
   const blockers = readiness.blockers.length ? readiness.blockers.map((blocker) => element("li", { text: blocker.message })) : [element("li", { text: "Hours, check-in and close-out documents are ready." })];
   return element("section", { class: `readiness ${readiness.ready ? "is-ready" : ""}` }, [
-    element("div", {}, [element("h3", { text: "Completion readiness" }), element("span", { class: statusClass(readiness.ready ? "verified" : "review"), text: readiness.ready ? "Ready" : "Needs attention" })]),
+    element("div", {}, [
+      element("h3", { text: `Completion readiness · ${readiness.programmeCode} v${readiness.programmeVersion}` }),
+      element("span", { class: statusClass(readiness.ready ? "verified" : "review"), text: readiness.ready ? "Ready" : "Needs attention" }),
+    ]),
+    element("p", {
+      text: `${readiness.completedCheckIns} of ${readiness.minimumCheckIns} required check-ins recorded.`,
+    }),
     element("ul", {}, blockers),
   ]);
 }
@@ -1265,7 +2015,7 @@ function renderSettings() {
     ]),
   ])));
   return element("section", {}, [
-    viewHeader("06 / School settings", "Make the workspace your own.", "Branding, access and retention controls apply to this self-hosted installation."),
+    viewHeader("07 / School settings", "Make the workspace your own.", "Branding, access and retention controls apply to this self-hosted installation."),
     element("div", { class: "settings-grid" }, [
       element("section", { class: "workspace-card" }, [
         element("div", { class: "card-title" }, [element("h2", { text: "Runtime branding" }), element("p", { text: "Use colours with enough contrast for your staff. The API rejects unreadable primary and surface colours." })]),
@@ -1278,6 +2028,267 @@ function renderSettings() {
       retentionManager(),
     ]),
   ]);
+}
+
+function programmeRequirementsText(requirements) {
+  return requirements
+    .map((requirement) => (
+      `${requirement.code} | ${requirement.label} | ${requirement.acceptedStatuses.join(", ")}`
+    ))
+    .join("\n");
+}
+
+function parseProgrammeRequirements(value) {
+  const allowedStatuses = new Set(["draft", "ready", "signed", "archived"]);
+  const codes = new Set();
+  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    .map((line, index) => {
+      const [rawCode, rawLabel, rawStatuses, ...extra] = line.split("|");
+      const code = rawCode?.trim() ?? "";
+      const label = rawLabel?.trim() ?? "";
+      const acceptedStatuses = (rawStatuses ?? "")
+        .split(",")
+        .map((status) => status.trim().toLowerCase())
+        .filter(Boolean);
+      if (
+        extra.length
+        || !/^[a-z][a-z0-9_]{1,39}$/.test(code)
+        || !label
+        || !acceptedStatuses.length
+        || acceptedStatuses.some((status) => !allowedStatuses.has(status))
+        || new Set(acceptedStatuses).size !== acceptedStatuses.length
+        || codes.has(code)
+      ) {
+        throw new Error(
+          `Requirement line ${index + 1} must be: code | label | draft, ready, signed or archived.`,
+        );
+      }
+      codes.add(code);
+      return { code, label, acceptedStatuses };
+    });
+}
+
+function renderProgrammes() {
+  if (!canManageProgrammes()) return renderOverview();
+  const create = element("button", {
+    class: "button-small",
+    type: "button",
+    text: "New programme",
+    onClick: openProgrammeCreateForm,
+  });
+  const list = element("section", { class: "workspace-card programme-list" });
+  if (!state.programmes.length) {
+    list.append(emptyPanel(
+      "No programmes are configured.",
+      "Create the first version before opening placements.",
+    ));
+  }
+  state.programmes.forEach((programme) => {
+    const version = programme.currentVersion;
+    const requirements = version.requirements.length
+      ? version.requirements.map((item) => item.label).join(" · ")
+      : "No document requirements";
+    list.append(element("article", { class: "programme-row" }, [
+      element("div", {}, [
+        element("p", { class: "eyebrow", text: `${programme.code} / VERSION ${version.version}` }),
+        element("h2", { text: programme.name }),
+        element("p", { text: programme.description || "No programme note has been recorded." }),
+        element("small", {
+          text: `${version.defaultTargetHours} default hours · ${version.minimumCheckIns} minimum check-ins · ${requirements}`,
+        }),
+      ]),
+      element("div", { class: "list-actions" }, [
+        element("span", {
+          class: statusClass(programme.active ? "verified" : "cancelled"),
+          text: programme.active ? "Active" : "Inactive",
+        }),
+        element("button", {
+          class: "row-button",
+          type: "button",
+          text: "Version history",
+          onClick: () => openProgrammeHistory(programme),
+        }),
+        element("button", {
+          class: "row-button",
+          type: "button",
+          text: "Edit",
+          onClick: () => openProgrammeEditForm(programme),
+        }),
+        element("button", {
+          class: "row-button",
+          type: "button",
+          text: "Publish version",
+          onClick: () => openProgrammePublishForm(programme),
+        }),
+      ]),
+    ]));
+  });
+  return element("section", {}, [
+    viewHeader(
+      "06 / Programme policies",
+      "Rules that stay with the placement.",
+      "Publish immutable versions for target hours, check-ins and required evidence. Existing placements keep the version they started with.",
+      create,
+    ),
+    list,
+  ]);
+}
+
+async function openProgrammeHistory(programme) {
+  const result = await request(`/programmes/${programme.id}/versions`);
+  const list = element("section", { class: "programme-history" });
+  result.items.forEach((version) => {
+    const evidence = version.requirements.length
+      ? version.requirements.map((requirement) => (
+          `${requirement.label} (${requirement.acceptedStatuses.join(", ")})`
+        )).join(" · ")
+      : "No document requirements";
+    list.append(element("article", { class: "programme-history-row" }, [
+      element("div", { class: "programme-history-heading" }, [
+        element("p", { class: "eyebrow", text: `VERSION ${version.version}` }),
+        element("time", {
+          text: formatDateTime(version.publishedAt),
+          attrs: { datetime: version.publishedAt },
+        }),
+      ]),
+      element("p", {
+        text: `${version.defaultTargetHours} default hours · ${version.minimumCheckIns} minimum check-ins`,
+      }),
+      element("small", { text: evidence }),
+    ]));
+  });
+  openModal(
+    `${programme.name} · version history`,
+    "Every published version is immutable and remains available for placements that already use it.",
+    list,
+  );
+}
+
+function programmeVersionFields(version = null) {
+  const targetHours = simpleInput(
+    "number",
+    String(version?.defaultTargetHours ?? 160),
+    { required: true },
+  );
+  targetHours.min = "1";
+  targetHours.max = "2000";
+  targetHours.step = "0.5";
+  const minimumCheckIns = simpleInput(
+    "number",
+    String(version?.minimumCheckIns ?? 1),
+    { required: true },
+  );
+  minimumCheckIns.min = "0";
+  minimumCheckIns.max = "100";
+  minimumCheckIns.step = "1";
+  const requirements = element("textarea", {
+    value: programmeRequirementsText(version?.requirements ?? [
+      { code: "training_agreement", label: "Signed training agreement", acceptedStatuses: ["signed", "archived"] },
+      { code: "attendance_log", label: "Signed attendance log", acceptedStatuses: ["signed", "archived"] },
+      { code: "evaluation", label: "Completed evaluation", acceptedStatuses: ["ready", "signed", "archived"] },
+    ]),
+    required: true,
+  });
+  requirements.placeholder = "training_agreement | Signed training agreement | signed, archived";
+  return { targetHours, minimumCheckIns, requirements };
+}
+
+function openProgrammeCreateForm() {
+  const code = simpleInput("text", "", { required: true });
+  code.placeholder = "TECH_PLACEMENT";
+  const name = simpleInput("text", "", { required: true });
+  const description = element("textarea");
+  const version = programmeVersionFields();
+  const form = formWithSubmit([
+    { label: "Programme code", input: code },
+    { label: "Programme name", input: name },
+    { label: "Default target hours", input: version.targetHours },
+    { label: "Minimum check-ins", input: version.minimumCheckIns },
+    { label: "Operational description", input: description, full: true },
+    { label: "Requirements: code | label | accepted statuses", input: version.requirements, full: true },
+  ], "Create programme", async () => {
+    await request("/programmes", {
+      method: "POST",
+      body: {
+        code: code.value.trim().toUpperCase(),
+        name: name.value.trim(),
+        description: description.value.trim(),
+        defaultTargetHours: Number(version.targetHours.value),
+        minimumCheckIns: Number(version.minimumCheckIns.value),
+        requirements: parseProgrammeRequirements(version.requirements.value),
+      },
+    });
+    await refreshCore();
+    flash("Programme version 1 published.");
+    close();
+    renderWorkspace();
+  });
+  const { close } = openModal(
+    "New programme",
+    "The first version is published immediately. Later rule changes create a new immutable version.",
+    form,
+  );
+}
+
+function openProgrammeEditForm(programme) {
+  const code = simpleInput("text", programme.code, { required: true });
+  code.disabled = true;
+  const name = simpleInput("text", programme.name, { required: true });
+  const description = element("textarea", { value: programme.description });
+  const active = element("input", { type: "checkbox", checked: programme.active });
+  const form = formWithSubmit([
+    { label: "Programme code", input: code },
+    { label: "Programme name", input: name },
+    { label: "Active for new placements", input: active },
+    { label: "Operational description", input: description, full: true },
+  ], "Save programme", async () => {
+    await request(`/programmes/${programme.id}`, {
+      method: "PATCH",
+      body: {
+        revision: programme.revision,
+        name: name.value.trim(),
+        description: description.value.trim(),
+        active: active.checked,
+      },
+    });
+    await refreshCore();
+    flash("Programme details updated.");
+    close();
+    renderWorkspace();
+  });
+  const { close } = openModal(
+    "Edit programme",
+    "Metadata and availability may change. Published rules remain immutable.",
+    form,
+  );
+}
+
+function openProgrammePublishForm(programme) {
+  const version = programmeVersionFields(programme.currentVersion);
+  const form = formWithSubmit([
+    { label: "Default target hours", input: version.targetHours },
+    { label: "Minimum check-ins", input: version.minimumCheckIns },
+    { label: "Requirements: code | label | accepted statuses", input: version.requirements, full: true },
+  ], `Publish version ${programme.currentVersion.version + 1}`, async () => {
+    await request(`/programmes/${programme.id}/versions`, {
+      method: "POST",
+      body: {
+        revision: programme.revision,
+        defaultTargetHours: Number(version.targetHours.value),
+        minimumCheckIns: Number(version.minimumCheckIns.value),
+        requirements: parseProgrammeRequirements(version.requirements.value),
+      },
+    });
+    await refreshCore();
+    flash(`Programme version ${programme.currentVersion.version + 1} published.`);
+    close();
+    renderWorkspace();
+  });
+  const { close } = openModal(
+    `Publish ${programme.name}`,
+    "New placements may use this version. Existing placements retain their original policy and audit context.",
+    form,
+  );
 }
 
 function logoManager() {
@@ -1553,6 +2564,7 @@ function openChangePasswordForm() {
       method: "POST",
       body: { currentPassword: currentPassword.value, newPassword: newPassword.value },
     });
+    resetCoverageSessionState();
     state.session = null;
     close();
     loginScreen();
@@ -1695,7 +2707,7 @@ function openModal(title, description, form) {
   app.inert = true;
   document.body.classList.add("modal-open");
   document.body.append(modal);
-  form.querySelector("input, select, textarea, button:not([disabled])")?.focus();
+  (form.querySelector("input, select, textarea, button:not([disabled])") ?? closeButton).focus();
   return { close, modal };
 }
 
@@ -1869,23 +2881,52 @@ function openHostEditForm(host) {
   const { close } = openModal("Edit host", "Changes are checked against the latest record revision. Refresh if somebody else saved first.", form);
 }
 
-function openPlacementForm() {
-  const student = lookupControl("students", { required: true, placeholder: "Search student" });
+function openPlacementForm(defaults = {}, options = {}) {
+  const student = lookupControl("students", {
+    required: true,
+    placeholder: "Search student",
+    initial: defaults.student ?? null,
+  });
   const host = lookupControl("hosts", { required: true, placeholder: "Search host" });
-  const period = lookupControl("periods", { placeholder: "Search placement period" });
+  const period = lookupControl("periods", {
+    placeholder: "Search placement period",
+    initial: defaults.period ?? null,
+  });
   const tutor = lookupControl("tutors", { placeholder: "Search school tutor" });
-  const startDate = simpleInput("date", "", { required: true });
-  const endDate = simpleInput("date", "", { required: true });
-  const targetHours = simpleInput("number", "", { required: true });
+  const activeProgrammes = state.programmes.filter((item) => item.active);
+  const initialProgramme = activeProgrammes[0] ?? null;
+  const programme = selectInput(
+    activeProgrammes.map((item) => [
+      item.currentVersion.id,
+      `${item.name} · ${item.code} · v${item.currentVersion.version}`,
+    ]),
+    initialProgramme?.currentVersion.id ?? "",
+    "Select programme",
+  );
+  programme.required = true;
+  const startDate = simpleInput("date", defaults.startDate ?? "", { required: true });
+  const endDate = simpleInput("date", defaults.endDate ?? "", { required: true });
+  const targetHours = simpleInput(
+    "number",
+    initialProgramme ? String(initialProgramme.currentVersion.defaultTargetHours) : "",
+    { required: true },
+  );
   targetHours.min = "1";
   targetHours.max = "2000";
   targetHours.step = "0.5";
   const hostTutorName = simpleInput("text");
   const hostTutorEmail = simpleInput("email");
   const notes = element("textarea");
+  programme.addEventListener("change", () => {
+    const selected = activeProgrammes.find(
+      (item) => item.currentVersion.id === programme.value,
+    );
+    if (selected) targetHours.value = String(selected.currentVersion.defaultTargetHours);
+  });
   const form = formWithSubmit([
     { label: "Student", input: student },
     { label: "Host", input: host },
+    { label: "Programme policy", input: programme, full: true },
     { label: "Period", input: period },
     { label: "School tutor", input: tutor },
     { label: "Start date", input: startDate },
@@ -1895,13 +2936,14 @@ function openPlacementForm() {
     { label: "Host tutor email", input: hostTutorEmail },
     { label: "Operational notes", input: notes, full: true },
   ], "Create placement", async () => {
-    await request("/placements", {
+    const created = await request("/placements", {
       method: "POST",
       body: {
         studentId: student.value,
         hostId: host.value,
         periodId: period.value || null,
         schoolTutorId: tutor.value || null,
+        programmeVersionId: programme.value,
         startDate: startDate.value,
         endDate: endDate.value,
         targetHours: Number(targetHours.value),
@@ -1910,13 +2952,49 @@ function openPlacementForm() {
         notes: notes.value.trim(),
       },
     });
-    await refreshCore();
-    state.view = "placements";
-    flash("Placement created.");
+    let refreshError = null;
+    try {
+      await refreshCore();
+    } catch (error) {
+      refreshError = error;
+    }
+    let callbackError = null;
+    if (typeof options.onCreated === "function") {
+      try {
+        await options.onCreated(created);
+      } catch (error) {
+        callbackError = error;
+      }
+    }
+    state.selectedPlacement = null;
+    state.view = options.returnView ?? "placements";
+    if (refreshError && state.view === "coverage") {
+      resetCoverageState(
+        "The placement was created, but Coverage could not be refreshed. Retry the coverage refresh; do not create the placement again.",
+      );
+    }
     close();
-    renderWorkspace();
+    flash("Placement created.");
+    if (state.session?.authenticated) {
+      renderWorkspace();
+      document.querySelector(".view-header h1")?.focus();
+    }
+    if (refreshError) {
+      flash(
+        state.view === "coverage"
+          ? "Placement created, but Coverage needs a refresh. Use Retry coverage refresh."
+          : "Placement created, but current workspace data could not refresh. Reload before continuing.",
+        "error",
+      );
+    } else if (callbackError) {
+      flash("Placement created, but the follow-up action could not complete.", "error");
+    }
   });
-  const { close } = openModal("New placement", "Assign the placement, then use the record to capture activity and evidence.", form);
+  const { close } = openModal(
+    "New placement",
+    "Assign the programme policy first. Its published version determines default hours, check-ins and required evidence for this placement.",
+    form,
+  );
 }
 
 function openPlacementEditForm(placement) {
@@ -1939,6 +3017,25 @@ function openPlacementEditForm(placement) {
     placeholder: "Search school tutor",
     initial: placement.schoolTutorId ? { id: placement.schoolTutorId, label: placement.schoolTutorName, secondary: "Current tutor" } : null,
   });
+  const availableProgrammes = state.programmes.filter((item) => (
+    item.active || item.currentVersion.id === placement.programmeVersionId
+  ));
+  const programmeOptions = availableProgrammes.map((item) => [
+    item.currentVersion.id,
+    `${item.name} · ${item.code} · v${item.currentVersion.version}`,
+  ]);
+  if (!programmeOptions.some(([id]) => id === placement.programmeVersionId)) {
+    programmeOptions.unshift([
+      placement.programmeVersionId,
+      `${placement.programmeName} · ${placement.programmeCode} · v${placement.programmeVersion} · current placement`,
+    ]);
+  }
+  const programme = selectInput(
+    programmeOptions,
+    placement.programmeVersionId,
+    "Select programme",
+  );
+  programme.required = true;
   const startDate = simpleInput("date", placement.startDate, { required: true });
   const endDate = simpleInput("date", placement.endDate, { required: true });
   const targetHours = simpleInput("number", String(placement.targetHours), { required: true });
@@ -1951,6 +3048,7 @@ function openPlacementEditForm(placement) {
   const fields = [
     { label: "Student", input: student },
     { label: "Host", input: host },
+    { label: "Programme policy", input: programme, full: true },
     { label: "Period", input: period },
     { label: "School tutor", input: tutor },
     { label: "Start date", input: startDate },
@@ -1966,6 +3064,7 @@ function openPlacementEditForm(placement) {
     if (host.value !== placement.hostId) changes.hostId = host.value;
     if ((period.value || null) !== (placement.periodId ?? null)) changes.periodId = period.value || null;
     if ((tutor.value || null) !== (placement.schoolTutorId ?? null)) changes.schoolTutorId = tutor.value || null;
+    if (programme.value !== placement.programmeVersionId) changes.programmeVersionId = programme.value;
     if (startDate.value !== placement.startDate) changes.startDate = startDate.value;
     if (endDate.value !== placement.endDate) changes.endDate = endDate.value;
     if (Number(targetHours.value) !== Number(placement.targetHours)) changes.targetHours = Number(targetHours.value);
@@ -1996,7 +3095,11 @@ function openPlacementEditForm(placement) {
       throw error;
     }
   });
-  const { close } = openModal("Edit placement", "Search active records to reassign the placement, or correct its dates and operational contacts.", form);
+  const { close } = openModal(
+    "Edit placement",
+    "Changing programme policy is allowed only before time, check-ins or evidence have been recorded. Published versions remain available for historical records.",
+    form,
+  );
 }
 
 function openCohortForm(returnToManager = false) {
@@ -2389,6 +3492,10 @@ function openDocumentEditForm(placement, documentRecord) {
   }
   const kind = selectInput([["training_agreement", "Training agreement"], ["attendance_log", "Attendance log"], ["evaluation", "Evaluation"], ["completion_certificate", "Completion certificate"], ["other", "Other"]], documentRecord.kind, "Select document type");
   const title = simpleInput("text", documentRecord.title, { required: true });
+  if (documentRecord.requirementId) {
+    kind.disabled = true;
+    title.disabled = true;
+  }
   const allowedStatuses = state.session.user.role === "tutor"
     ? [["missing", "Missing"], ["draft", "Draft"], ["ready", "Ready"]]
     : [["missing", "Missing"], ["draft", "Draft"], ["ready", "Ready"], ["signed", "Signed"]];
@@ -2406,8 +3513,10 @@ function openDocumentEditForm(placement, documentRecord) {
       method: "PATCH",
       body: {
         revision: documentRecord.revision,
-        kind: kind.value,
-        title: title.value.trim(),
+        ...(documentRecord.requirementId ? {} : {
+          kind: kind.value,
+          title: title.value.trim(),
+        }),
         status: status.value,
         dueDate: dueDate.value || null,
         reference: reference.value.trim(),
@@ -2418,7 +3527,13 @@ function openDocumentEditForm(placement, documentRecord) {
     flash("Document updated.");
     close();
   });
-  const { close } = openModal("Edit document", "Correct the document record or move it through its review states.", form);
+  const { close } = openModal(
+    "Edit document",
+    documentRecord.requirementId
+      ? "This evidence item comes from the placement programme. Its type and title stay fixed while status, due date and external reference may change."
+      : "Correct the document record or move it through its review states.",
+    form,
+  );
 }
 
 function documentArchiveButton(placement, documentRecord) {

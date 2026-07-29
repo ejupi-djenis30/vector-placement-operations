@@ -7,6 +7,31 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function dateFrom(value, name) {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new TypeError(`${name} must be a valid date.`);
+  }
+  return date;
+}
+
+function sessionTiming(sessionIdleMinutes, now) {
+  if (
+    !Number.isInteger(sessionIdleMinutes)
+    || sessionIdleMinutes < 5
+    || sessionIdleMinutes > 10_080
+  ) {
+    throw new TypeError("sessionIdleMinutes must be an integer between 5 and 10080.");
+  }
+  const current = dateFrom(now, "now");
+  return {
+    nowIso: current.toISOString(),
+    idleCutoffIso: new Date(
+      current.getTime() - sessionIdleMinutes * 60_000,
+    ).toISOString(),
+  };
+}
+
 function userFromRow(row) {
   if (!row) return null;
   return {
@@ -63,12 +88,28 @@ export function deleteSession(db, token) {
   db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
 }
 
-export function deleteExpiredSessions(db, now = new Date().toISOString()) {
-  return db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now).changes;
+export function deleteExpiredSessions(
+  db,
+  sessionIdleMinutes = 45,
+  now = new Date(),
+) {
+  const timing = sessionTiming(sessionIdleMinutes, now);
+  return db.prepare(`
+    DELETE FROM sessions
+    WHERE expires_at <= @nowIso
+      OR last_seen_at <= @idleCutoffIso
+  `).run(timing).changes;
 }
 
-export function readSession(db, token) {
+export function readSession(
+  db,
+  token,
+  sessionIdleMinutes = 45,
+  now = new Date(),
+) {
   if (!token) return null;
+  const timing = sessionTiming(sessionIdleMinutes, now);
+  const parameters = { tokenHash: sha256(token), ...timing };
   const row = db.prepare(`
     SELECT
       se.id AS session_id,
@@ -80,20 +121,62 @@ export function readSession(db, token) {
     FROM sessions se
     JOIN users u ON u.id = se.user_id
     JOIN schools s ON s.id = u.school_id
-    WHERE se.token_hash = ?
-      AND se.expires_at > ?
+    WHERE se.token_hash = @tokenHash
+      AND se.expires_at > @nowIso
+      AND se.last_seen_at > @idleCutoffIso
       AND u.active = 1
     LIMIT 1
-  `).get(sha256(token), new Date().toISOString());
-  if (!row) return null;
-  db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ?")
-    .run(new Date().toISOString(), row.session_id);
+  `).get(parameters);
+  if (!row) {
+    db.prepare(`
+      DELETE FROM sessions
+      WHERE token_hash = @tokenHash
+        AND (
+          expires_at <= @nowIso
+          OR last_seen_at <= @idleCutoffIso
+          OR NOT EXISTS (
+            SELECT 1
+            FROM users u
+            WHERE u.id = sessions.user_id
+              AND u.active = 1
+          )
+        )
+    `).run(parameters);
+    return null;
+  }
   return {
     id: row.session_id,
     csrfToken: row.csrf_token,
     expiresAt: row.expires_at,
     user: userFromRow(row),
   };
+}
+
+export function touchSession(
+  db,
+  sessionId,
+  seenAt = new Date(),
+  now = new Date(),
+) {
+  if (!sessionId) return 0;
+  const seenAtIso = dateFrom(seenAt, "seenAt").toISOString();
+  const nowIso = dateFrom(now, "now").toISOString();
+  return db.prepare(`
+    UPDATE sessions
+    SET last_seen_at = CASE
+      WHEN last_seen_at < @seenAtIso THEN @seenAtIso
+      ELSE last_seen_at
+    END
+    WHERE id = @sessionId
+      AND expires_at > @seenAtIso
+      AND expires_at > @nowIso
+      AND EXISTS (
+        SELECT 1
+        FROM users u
+        WHERE u.id = sessions.user_id
+          AND u.active = 1
+      )
+  `).run({ sessionId, seenAtIso, nowIso }).changes;
 }
 
 export function sessionCookieOptions(config, expires = undefined) {

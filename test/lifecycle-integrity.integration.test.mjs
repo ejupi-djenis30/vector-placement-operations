@@ -70,11 +70,16 @@ async function addRequiredEvidence(client, placementId, suffix) {
     ["attendance_log", "signed"],
     ["evaluation", "ready"],
   ]) {
-    ids[kind] = await created(client, `/api/placements/${placementId}/documents`, {
-      kind,
-      title: `${kind} ${suffix}`,
-      status,
+    const result = await client.request(`/api/placements/${placementId}/documents`, {
+      method: "POST",
+      body: {
+        kind,
+        title: `${kind} ${suffix}`,
+        status,
+      },
     });
+    assert.equal(result.response.status, 200);
+    ids[kind] = result.payload.id;
   }
   return ids;
 }
@@ -211,7 +216,7 @@ test("placement and evidence dates remain coherent", async () => {
       },
     },
   );
-  assert.equal(prePlacementDeadline.response.status, 201);
+  assert.equal(prePlacementDeadline.response.status, 200);
 });
 
 test("dependent records cannot be deactivated while placements remain open", async () => {
@@ -419,7 +424,7 @@ test("signed evidence is immutable and can be superseded without erasing history
     `/api/placements/${record.placementId}/documents/${evidence.training_agreement}`,
     {
       method: "PATCH",
-      body: { revision: 1, reference: "silently-replaced-reference" },
+      body: { revision: 2, reference: "silently-replaced-reference" },
     },
   );
   assert.equal(tamper.response.status, 409);
@@ -430,7 +435,7 @@ test("signed evidence is immutable and can be superseded without erasing history
     {
       method: "POST",
       body: {
-        revision: 1,
+        revision: 2,
         reasonCode: "replacement_received",
         title: "Replacement training agreement",
         status: "draft",

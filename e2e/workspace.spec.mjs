@@ -75,7 +75,7 @@ async function signIn(page) {
     const permanentResponse = await submitLogin(page, E2E_PASSWORD);
     expect(permanentResponse.ok()).toBeTruthy();
   }
-  await expect(page.getByRole("heading", { name: "Keep the next action visible." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^(?:Keep the next action visible\.|Know what needs attention next\.)$/ })).toBeVisible();
 }
 
 async function signInAs(page, { email, temporaryPassword, permanentPassword }) {
@@ -99,7 +99,7 @@ async function signInAs(page, { email, temporaryPassword, permanentPassword }) {
     const permanentLogin = await submitLogin(page, permanentPassword, email);
     expect(permanentLogin.ok()).toBeTruthy();
   }
-  await expect(page.getByRole("heading", { name: "Keep the next action visible." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^(?:Keep the next action visible\.|Know what needs attention next\.)$/ })).toBeVisible();
 }
 
 async function ensureUserViaUi(page, { email, displayName, role, temporaryPassword }) {
@@ -161,7 +161,7 @@ test("forces the bootstrap password to be replaced before loading workspace data
 
   const permanentLogin = await submitLogin(page, E2E_PASSWORD);
   expect(permanentLogin.ok()).toBeTruthy();
-  await expect(page.getByRole("heading", { name: "Keep the next action visible." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^(?:Keep the next action visible\.|Know what needs attention next\.)$/ })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await expect(page.locator(".workspace-topbar")).toBeInViewport();
 });
@@ -169,7 +169,7 @@ test("forces the bootstrap password to be replaced before loading workspace data
 test("signs in to the self-hosted workspace and records a verifiable time entry", async ({ page }) => {
   await signIn(page);
   await expect(page.locator(".metric")).toHaveCount(4);
-  await expect(page.getByText("Placement queue", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open attention inbox", exact: true })).toBeVisible();
 
   await openPlacement(page, "Noah Rossi");
   await page.getByRole("button", { name: "Add time entry", exact: true }).click();
@@ -184,6 +184,113 @@ test("signs in to the self-hosted workspace and records a verifiable time entry"
   await page.getByRole("button", { name: "Verify", exact: true }).click();
   await expect(page.getByText("Time entry verified.", { exact: true })).toBeVisible();
   await expect(page.getByText("1.5 hours · Verified", { exact: true })).toBeVisible();
+});
+
+test("routes role-scoped attention into persistent placement next actions", async ({ page }) => {
+  test.slow();
+  await signIn(page);
+  await ensureUserViaUi(page, {
+    email: TUTOR_EMAIL,
+    displayName: "E2E Tutor",
+    role: "tutor",
+    temporaryPassword: TUTOR_TEMP_PASSWORD,
+  });
+
+  await openPlacement(page, "Jonas Weber");
+  await page.getByRole("button", { name: "Edit placement", exact: true }).click();
+  let dialog = page.getByRole("dialog");
+  await dialog.getByRole("searchbox", { name: "School tutor", exact: true }).fill("E2E Tutor");
+  const tutorResults = dialog.getByRole("combobox", { name: "Search school tutor results" });
+  await expect(tutorResults.getByRole("option", { name: "E2E Tutor", exact: true })).toHaveCount(1);
+  await tutorResults.selectOption({ label: "E2E Tutor" });
+  await dialog.getByRole("button", { name: "Save placement", exact: true }).click();
+  await expect(page.getByText("Placement updated.", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signInAs(page, {
+    email: TUTOR_EMAIL,
+    temporaryPassword: TUTOR_TEMP_PASSWORD,
+    permanentPassword: TUTOR_PASSWORD,
+  });
+
+  const overviewAttention = page.locator(".workspace-card").filter({
+    has: page.getByText("Needs attention", { exact: true }),
+  });
+  await expect(overviewAttention).toHaveCount(1);
+  await expect(overviewAttention.getByText("Needs attention", { exact: true })).toBeVisible();
+  const overviewAttentionButton = overviewAttention.getByRole("button", {
+    name: /^(?:Attention|Open attention inbox)$/i,
+  });
+  await expect(overviewAttentionButton).toHaveCount(1);
+  await overviewAttentionButton.click();
+
+  await expect(page.getByRole("heading", { name: "What needs attention.", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Attention", exact: true })).toHaveAttribute("aria-current", "page");
+  let categoryFilter = page.getByLabel("Attention category filter", { exact: true });
+  for (const category of ["Evidence", "Hours", "Status", "Assignment"]) {
+    await expect(categoryFilter.getByRole("button", { name: category, exact: true })).toBeVisible();
+  }
+  await categoryFilter.getByRole("button", { name: "Evidence", exact: true }).click();
+  await expect(categoryFilter.getByRole("button", { name: "Evidence", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await categoryFilter.getByRole("button", { name: "Status", exact: true }).click();
+  await expect(categoryFilter.getByRole("button", { name: "Status", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  const attentionRows = page.getByRole("row").filter({
+    has: page.getByRole("button", { name: "Open placement", exact: true }),
+  });
+  await expect(attentionRows).toHaveCount(1);
+  const jonasAttention = attentionRows.filter({ hasText: "Jonas Weber" });
+  await expect(jonasAttention).toHaveCount(1);
+  await expect(page.getByText("Noah Rossi", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Ines Meyer", { exact: true })).toHaveCount(0);
+  const openTargets = jonasAttention.getByRole("button", { name: "Open placement", exact: true });
+  await expect(openTargets).toHaveCount(1);
+  await openTargets.focus();
+  await expect(openTargets).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Jonas Weber", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Add check-in", exact: true }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByLabel("When").fill("2026-06-20T10:30");
+  await dialog.getByLabel("Channel").selectOption("video");
+  await dialog.getByLabel("Summary").fill("Attention follow-up");
+  await dialog.getByLabel("Next action").fill("Confirm host review");
+  await dialog.getByRole("button", { name: "Add check-in", exact: true }).click();
+
+  await page.getByRole("button", { name: "Add document", exact: true }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Document type").selectOption("completion_certificate");
+  await dialog.getByLabel("Title").fill("Attention evidence");
+  await dialog.getByLabel("Status").selectOption("draft");
+  await dialog.getByLabel("Due date").fill("2026-06-20");
+  await dialog.getByLabel("Reference").fill("E2E-ATTN-001");
+  await dialog.getByRole("button", { name: "Add document", exact: true }).click();
+
+  let checkIn = page.locator(".activity-item").filter({ hasText: "Attention follow-up" });
+  let document = page.locator(".activity-item").filter({ hasText: "Attention evidence" });
+  await expect(checkIn.getByText("Next action: Confirm host review", { exact: true })).toBeVisible();
+  await expect(document.getByText("Due Jun 20, 2026", { exact: true })).toBeVisible();
+  await expect(document.getByText("Reference: E2E-ATTN-001", { exact: true })).toBeVisible();
+
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { name: /^(?:Keep the next action visible\.|Know what needs attention next\.)$/ })).toBeVisible();
+  await page.getByRole("button", { name: "Attention", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "What needs attention.", exact: true })).toBeVisible();
+  categoryFilter = page.getByLabel("Attention category filter", { exact: true });
+  await categoryFilter.getByRole("button", { name: "Status", exact: true }).click();
+  const reloadedRow = page.getByRole("row").filter({
+    has: page.getByRole("button", { name: "Open placement", exact: true }),
+    hasText: "Jonas Weber",
+  });
+  await expect(reloadedRow).toHaveCount(1);
+  await reloadedRow.getByRole("button", { name: "Open placement", exact: true }).click();
+
+  checkIn = page.locator(".activity-item").filter({ hasText: "Attention follow-up" });
+  document = page.locator(".activity-item").filter({ hasText: "Attention evidence" });
+  await expect(checkIn.getByText("Next action: Confirm host review", { exact: true })).toBeVisible();
+  await expect(document.getByText("Due Jun 20, 2026", { exact: true })).toBeVisible();
+  await expect(document.getByText("Reference: E2E-ATTN-001", { exact: true })).toBeVisible();
 });
 
 test("shows structured CSV validation errors without enabling import", async ({ page }) => {
@@ -212,6 +319,45 @@ test("shows structured CSV validation errors without enabling import", async ({ 
   });
   await expect(dialog.getByText(/CSV check failed\. row 2, firstName: required/)).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Import checked CSV", exact: true })).toBeDisabled();
+});
+
+test("publishes a programme policy and applies its defaults to a new placement", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Programmes", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Rules that stay with the placement." })).toBeVisible();
+  await page.getByRole("button", { name: "New programme", exact: true }).click();
+  let dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Programme code").fill("E2E_ENGINEERING");
+  await dialog.getByLabel("Programme name").fill("E2E engineering pathway");
+  await dialog.getByLabel("Default target hours").fill("24");
+  await dialog.getByLabel("Minimum check-ins").fill("2");
+  await dialog.getByLabel("Operational description").fill("A fictional browser acceptance policy.");
+  await dialog.getByLabel("Requirements: code | label | accepted statuses").fill(
+    "mentor_report | Mentor report | ready, signed, archived",
+  );
+  await dialog.getByRole("button", { name: "Create programme", exact: true }).click();
+  await expect(page.getByText("Programme version 1 published.", { exact: true })).toBeVisible();
+  const programmeRow = page.locator(".programme-row").filter({ hasText: "E2E_ENGINEERING" });
+  await expect(programmeRow).toBeVisible();
+  await programmeRow.getByRole("button", { name: "Version history", exact: true }).click();
+  dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "E2E engineering pathway · version history" })).toBeVisible();
+  await expect(dialog.getByText("VERSION 1", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("24 default hours · 2 minimum check-ins", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Placements", exact: true }).click();
+  await page.getByRole("button", { name: "New placement", exact: true }).click();
+  dialog = page.getByRole("dialog");
+  const programmeOption = dialog.getByLabel("Programme policy").locator("option")
+    .filter({ hasText: "E2E engineering pathway" });
+  await dialog.getByLabel("Programme policy").selectOption(
+    await programmeOption.getAttribute("value"),
+  );
+  await expect(dialog.getByLabel("Target hours")).toHaveValue("24");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 });
 
 test("uses revisions for user edits and password resets, and refreshes stale forms", async ({ page }) => {
@@ -278,6 +424,7 @@ test("renders viewer and assigned tutor actions from role capabilities", async (
   await signInAs(page, { email: VIEWER_EMAIL, temporaryPassword: VIEWER_RESET_PASSWORD, permanentPassword: VIEWER_PASSWORD });
   await expect(page.getByRole("button", { name: "Audit", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Coverage", exact: true })).toBeVisible();
   await openPlacement(page, "Noah Rossi");
   await expect(page.getByRole("button", { name: /Add time entry|Add check-in|Add document|Update status|Reopen placement|Edit placement|Verify|Reject|Void|Archive|Supersede/ })).toHaveCount(0);
 
@@ -286,11 +433,396 @@ test("renders viewer and assigned tutor actions from role capabilities", async (
   await signInAs(page, { email: TUTOR_EMAIL, temporaryPassword: TUTOR_TEMP_PASSWORD, permanentPassword: TUTOR_PASSWORD });
   await expect(page.getByRole("button", { name: "Audit", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Coverage", exact: true })).toHaveCount(0);
   await openPlacement(page, "Noah Rossi");
   await expect(page.getByRole("button", { name: "Add time entry", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add check-in", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add document", exact: true })).toBeVisible();
+
   await expect(page.getByRole("button", { name: /Update status|Reopen placement|Edit placement|Verify|Reject|Void|Archive|Supersede/ })).toHaveCount(0);
+});
+
+test("clears stale coverage results when a filter refresh fails and recovers", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Coverage", exact: true }).click();
+  await expect(page.locator('tr[data-student-id="student-maya"]')).toBeVisible();
+
+  let failNextCoverageRequest = true;
+  await page.route(
+    (url) => url.pathname.endsWith("/api/coverage"),
+    async (route) => {
+      if (!failNextCoverageRequest) {
+        await route.continue();
+        return;
+      }
+      failNextCoverageRequest = false;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "coverage_unavailable",
+            message: "Synthetic coverage outage.",
+          },
+        }),
+      });
+    },
+  );
+
+  await withExpectedHttpFailure(page, 503, async () => {
+    await page.getByLabel("Cohort", { exact: true }).selectOption("cohort-systems");
+    await expect(page.getByText("Coverage could not be loaded.", { exact: true })).toBeVisible();
+  });
+  await expect(page.locator('tr[data-student-id="student-maya"]')).toHaveCount(0);
+  await expect(page.locator(".coverage-table")).toHaveCount(0);
+  await expect(page.locator('[data-coverage-metrics="true"] .metric strong')).toHaveText(["0", "0", "0", "0"]);
+
+  await page.getByRole("button", { name: "Retry coverage refresh", exact: true }).click();
+  await expect(page.locator('tr[data-student-id="student-ines"]')).toBeVisible();
+  await expect(page.getByText("Coverage could not be loaded.", { exact: true })).toHaveCount(0);
+});
+
+test("clears sensitive Coverage state between sessions without reloading the page", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Coverage", exact: true }).click();
+
+  const cohortResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname.endsWith("/api/coverage")
+      && url.searchParams.get("cohortId") === "cohort-systems";
+  });
+  await page.getByLabel("Cohort", { exact: true }).selectOption("cohort-systems");
+  await cohortResponse;
+
+  const queryResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname.endsWith("/api/coverage")
+      && url.searchParams.get("query") === "SESSION-LEAK-MARKER";
+  });
+  await page.getByRole("searchbox", { name: "Search cohort coverage", exact: true }).fill("SESSION-LEAK-MARKER");
+  await queryResponse;
+
+  const conflictResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname.endsWith("/api/coverage")
+      && url.searchParams.get("status") === "conflict";
+  });
+  await page.locator('[aria-label="Coverage status filter"]').getByRole("button", { name: "Conflicts", exact: true }).click();
+  await conflictResponse;
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to the workspace." })).toBeVisible();
+  const cleanCoverageRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname.endsWith("/api/coverage");
+  });
+  const loginResponse = await submitLogin(page, E2E_PASSWORD);
+  expect(loginResponse.ok()).toBeTruthy();
+  const cleanRequest = await cleanCoverageRequest;
+  await expect(page.getByRole("heading", { name: "Know what needs attention next." })).toBeVisible();
+
+  const cleanUrl = new URL(cleanRequest.url());
+  expect(cleanUrl.searchParams.get("query")).toBe("");
+  expect(cleanUrl.searchParams.get("status")).toBe("all");
+  expect(cleanUrl.searchParams.get("cohortId")).toBe("cohort-software");
+  expect(cleanUrl.searchParams.get("periodId")).toBe("period-spring-2026");
+
+  await page.getByRole("button", { name: "Coverage", exact: true }).click();
+  await expect(page.getByRole("searchbox", { name: "Search cohort coverage", exact: true })).toHaveValue("");
+  await expect(page.locator('[aria-label="Coverage status filter"]').getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Cohort", { exact: true })).toHaveValue("cohort-software");
+});
+
+test("loads every active Coverage reference beyond the first 100 records", async ({ page }) => {
+  const cohortPage = [
+    {
+      id: "cohort-software",
+      name: "4A Software",
+      academicYear: "2025/2026",
+      track: "Software",
+      tutorUserId: null,
+      active: true,
+      revision: 1,
+    },
+    ...Array.from({ length: 99 }, (_, index) => ({
+      id: `coverage-cohort-${index}`,
+      name: `Coverage cohort ${String(index).padStart(2, "0")}`,
+      academicYear: "2026/2027",
+      track: "",
+      tutorUserId: null,
+      active: true,
+      revision: 1,
+    })),
+  ];
+  const periodPage = [
+    {
+      id: "period-spring-2026",
+      name: "Spring 2026",
+      startDate: "2026-03-02",
+      endDate: "2026-06-26",
+      active: true,
+      revision: 1,
+    },
+    ...Array.from({ length: 99 }, (_, index) => ({
+      id: `coverage-period-${index}`,
+      name: `Coverage period ${String(index).padStart(2, "0")}`,
+      startDate: "2027-01-01",
+      endDate: "2027-01-31",
+      active: true,
+      revision: 1,
+    })),
+  ];
+  const overflowCohort = {
+    id: "coverage-overflow-cohort",
+    name: "Overflow cohort",
+    academicYear: "2027/2028",
+    track: "Overflow",
+    tutorUserId: null,
+    active: true,
+    revision: 1,
+  };
+  const overflowPeriod = {
+    id: "coverage-overflow-period",
+    name: "Overflow period",
+    startDate: "2027-07-01",
+    endDate: "2027-07-31",
+    active: true,
+    revision: 1,
+  };
+  const activeReferenceUrls = [];
+  await page.route(
+    (url) => url.pathname.includes("/api/reference-data/"),
+    async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get("active") !== "true") {
+        await route.continue();
+        return;
+      }
+      activeReferenceUrls.push(url);
+      const cohorts = url.pathname.endsWith("/cohorts");
+      const expectedCursor = cohorts ? "coverage-cohort-page-2" : "coverage-period-page-2";
+      const cursor = url.searchParams.get("cursor");
+      const items = cursor === expectedCursor
+        ? [cohorts ? overflowCohort : overflowPeriod]
+        : cohorts ? cohortPage : periodPage;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items,
+          nextCursor: cursor ? null : expectedCursor,
+        }),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.pathname.endsWith("/api/coverage"),
+    async (route) => {
+      const url = new URL(route.request().url());
+      const overflowSelected = url.searchParams.get("cohortId") === overflowCohort.id
+        && url.searchParams.get("periodId") === overflowPeriod.id;
+      const usesMockReference = url.searchParams.get("cohortId") === overflowCohort.id
+        || url.searchParams.get("periodId") === overflowPeriod.id;
+      if (!usesMockReference) {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          summary: {
+            total: overflowSelected ? 1 : 0,
+            unplaced: overflowSelected ? 1 : 0,
+            placed: 0,
+            conflict: 0,
+          },
+          items: overflowSelected ? [{
+            studentId: "coverage-overflow-student",
+            studentName: "Overflow Student",
+            externalRef: "OVERFLOW-101",
+            cohortId: overflowCohort.id,
+            cohortName: overflowCohort.name,
+            status: "unplaced",
+            placementCount: 0,
+            placements: [],
+            additionalPlacements: 0,
+          }] : [],
+          nextCursor: null,
+        }),
+      });
+    },
+  );
+
+  await signIn(page);
+  await page.getByRole("button", { name: "Coverage", exact: true }).click();
+  const cohort = page.getByLabel("Cohort", { exact: true });
+  const period = page.getByLabel("Placement period", { exact: true });
+  await expect(cohort.locator(`option[value="${overflowCohort.id}"]`)).toBeAttached();
+  await expect(period.locator(`option[value="${overflowPeriod.id}"]`)).toBeAttached();
+  await expect(cohort.locator("option")).toHaveCount(102);
+  await expect(period.locator("option")).toHaveCount(102);
+  const cursorRequests = activeReferenceUrls.filter((url) => url.searchParams.has("cursor"));
+  expect(cursorRequests).toHaveLength(2);
+  expect(cursorRequests.every((url) => url.searchParams.get("active") === "true" && url.searchParams.get("limit") === "100")).toBeTruthy();
+
+  await cohort.selectOption(overflowCohort.id);
+  await period.selectOption(overflowPeriod.id);
+  const overflowRow = page.locator('tr[data-student-id="coverage-overflow-student"]');
+  await expect(overflowRow).toBeVisible();
+  await overflowRow.getByRole("button", { name: "Create placement for Overflow Student", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator('select[aria-label="Search placement period results"]')).toHaveValue(overflowPeriod.id);
+  await expect(dialog.getByLabel("Start date")).toHaveValue(overflowPeriod.startDate);
+  await expect(dialog.getByLabel("End date")).toHaveValue(overflowPeriod.endDate);
+  await dialog.getByRole("button", { name: "Close dialog", exact: true }).click();
+});
+
+test("gives same-host placement actions unique date-aware accessible names", async ({ page }) => {
+  await page.route(
+    (url) => url.pathname.endsWith("/api/coverage"),
+    async (route) => {
+      const url = new URL(route.request().url());
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          summary: { total: 1, unplaced: 0, placed: 1, conflict: 0 },
+          items: [{
+            studentId: "duplicate-actions",
+            studentName: "Duplicate Actions",
+            externalRef: "DUPLICATE-ACTIONS",
+            cohortId: url.searchParams.get("cohortId"),
+            cohortName: "4A Software",
+            status: "placed",
+            placementCount: 2,
+            placements: [
+              {
+                id: "duplicate-placement-one",
+                hostName: "Same Host",
+                status: "planned",
+                startDate: "2026-03-02",
+                endDate: "2026-03-31",
+              },
+              {
+                id: "duplicate-placement-two",
+                hostName: "Same Host",
+                status: "active",
+                startDate: "2026-04-01",
+                endDate: "2026-04-30",
+              },
+            ],
+            additionalPlacements: 0,
+          }],
+          nextCursor: null,
+        }),
+      });
+    },
+  );
+
+  await signIn(page);
+  await page.getByRole("button", { name: "Coverage", exact: true }).click();
+  const buttons = page.locator('tr[data-student-id="duplicate-actions"] .coverage-actions > button');
+  await expect(buttons).toHaveCount(2);
+  const labels = await buttons.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("aria-label")));
+  expect(labels.every(Boolean)).toBeTruthy();
+  expect(new Set(labels).size).toBe(2);
+  expect(labels[0]).toContain("Mar 02, 2026 to Mar 31, 2026");
+  expect(labels[1]).toContain("Apr 01, 2026 to Apr 30, 2026");
+});
+
+test("plans cohort coverage and creates a prefilled placement from a gap", async ({ page }) => {
+  test.setTimeout(30_000);
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Students", exact: true }).click();
+  await page.getByRole("button", { name: "New student", exact: true }).click();
+  let dialog = page.getByRole("dialog");
+  await dialog.getByLabel("First name").fill("Coverage");
+  await dialog.getByLabel("Last name").fill("Candidate");
+  await dialog.getByLabel("External reference").fill("COVERAGE-E2E");
+  const cohortResults = dialog.locator('select[aria-label="Search cohort results"]');
+  await expect(cohortResults.locator('option[value="cohort-software"]')).toBeAttached();
+  await cohortResults.selectOption("cohort-software");
+  await dialog.getByRole("button", { name: "Create student", exact: true }).click();
+  await expect(page.getByText("Student created.", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Coverage", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Every student, accounted for." })).toBeVisible();
+  await expect(page.getByLabel("Cohort", { exact: true })).toHaveValue("cohort-software");
+  await expect(page.getByLabel("Placement period", { exact: true })).toHaveValue("period-spring-2026");
+
+  const coverageSearch = page.getByRole("searchbox", { name: "Search cohort coverage", exact: true });
+  await coverageSearch.fill("Coverage Candidate");
+  await page.getByRole("button", { name: "Unplaced", exact: true }).click();
+  const uncoveredRow = page.locator(".coverage-table tbody tr").filter({ hasText: "Coverage Candidate" });
+  await expect(uncoveredRow).toHaveCount(1);
+  await expect(uncoveredRow).toContainText("Unplaced");
+  const unplacedMetric = page.locator('[data-coverage-metrics="true"] .metric').filter({ hasText: "Unplaced" });
+  await expect(unplacedMetric.locator("strong")).toHaveText("1");
+
+  await uncoveredRow.getByRole("button", { name: "Create placement for Coverage Candidate", exact: true }).click();
+  dialog = page.getByRole("dialog");
+  await expect(dialog.locator('select[aria-label="Search student results"]')).toHaveValue(/.+/);
+  await expect(dialog.locator('select[aria-label="Search student results"] option:checked')).toContainText("Coverage Candidate");
+  await expect(dialog.locator('select[aria-label="Search placement period results"]')).toHaveValue("period-spring-2026");
+  await expect(dialog.getByLabel("Start date")).toHaveValue("2026-03-02");
+  await expect(dialog.getByLabel("End date")).toHaveValue("2026-06-26");
+  const hostResults = dialog.locator('select[aria-label="Search host results"]');
+  await expect(hostResults.locator('option[value="host-atlas"]')).toBeAttached();
+  await hostResults.selectOption("host-atlas");
+
+  let placementCreateRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/api/placements") && request.method() === "POST") {
+      placementCreateRequests += 1;
+    }
+  });
+  let failCoverageRefresh = true;
+  await page.route(
+    (url) => url.pathname.endsWith("/api/coverage"),
+    async (route) => {
+      if (!failCoverageRefresh) {
+        await route.continue();
+        return;
+      }
+      failCoverageRefresh = false;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "coverage_unavailable",
+            message: "Synthetic coverage refresh failure.",
+          },
+        }),
+      });
+    },
+  );
+  await withExpectedHttpFailure(page, 503, async () => {
+    await dialog.getByRole("button", { name: "Create placement", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByText("Coverage could not be loaded.", { exact: true })).toBeVisible();
+  });
+
+  await expect(page.getByText("Placement created.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Every student, accounted for." })).toBeVisible();
+  await expect(page.getByText(/placement was created, but Coverage could not be refreshed/i)).toBeVisible();
+  expect(placementCreateRequests).toBe(1);
+
+  await page.getByRole("button", { name: "Retry coverage refresh", exact: true }).click();
+  await expect(page.getByText("No students match this coverage view.", { exact: true })).toBeVisible();
+  expect(placementCreateRequests).toBe(1);
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const coveredRow = page.locator(".coverage-table tbody tr").filter({ hasText: "Coverage Candidate" });
+  await expect(coveredRow).toHaveCount(1);
+  await expect(coveredRow).toContainText("Placed");
+  await coveredRow.getByRole("button", {
+    name: /Open placement 1 of 1 for Coverage Candidate at Atlas Workshop, .+ to .+/,
+  }).click();
+  await expect(page.getByRole("heading", { name: "Coverage Candidate", exact: true })).toBeVisible();
+  await expect(page.getByText("Atlas Workshop", { exact: true }).first()).toBeVisible();
 });
 
 test.describe("mobile workspace", () => {
@@ -328,7 +860,7 @@ test("keeps the signed-in session after a wrong current password", async ({ page
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Change password", exact: true })).toBeEnabled();
   await dialog.getByRole("button", { name: "Close dialog" }).click();
-  await expect(page.getByRole("heading", { name: "Keep the next action visible." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^(?:Keep the next action visible\.|Know what needs attention next\.)$/ })).toBeVisible();
   await page.getByRole("button", { name: "Placements", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Every placement, in context." })).toBeVisible();
 });

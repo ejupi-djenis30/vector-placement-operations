@@ -99,6 +99,23 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     }
   }
 
+  const sessionHours = integerFrom(env.VECTOR_SESSION_HOURS, 12, {
+    min: 1,
+    max: 168,
+    name: "VECTOR_SESSION_HOURS",
+  });
+  const sessionIdleMinutes = integerFrom(env.VECTOR_SESSION_IDLE_MINUTES, 45, {
+    min: 5,
+    max: 10_080,
+    name: "VECTOR_SESSION_IDLE_MINUTES",
+  });
+  if (sessionIdleMinutes > sessionHours * 60) {
+    throw new Error(
+      "VECTOR_SESSION_IDLE_MINUTES must be less than or equal to "
+      + "VECTOR_SESSION_HOURS converted to minutes.",
+    );
+  }
+
   return Object.freeze({
     nodeEnv,
     production,
@@ -121,11 +138,8 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
       max: 2_097_152,
       name: "VECTOR_BODY_LIMIT",
     }),
-    sessionHours: integerFrom(env.VECTOR_SESSION_HOURS, 12, {
-      min: 1,
-      max: 168,
-      name: "VECTOR_SESSION_HOURS",
-    }),
+    sessionHours,
+    sessionIdleMinutes,
     bootstrapSchoolName: stringFrom(env.VECTOR_BOOTSTRAP_SCHOOL_NAME, "VECTOR School", {
       name: "VECTOR_BOOTSTRAP_SCHOOL_NAME",
       max: 120,

@@ -8,6 +8,10 @@ import {
   listStudents,
 } from "./data.mjs";
 import { AppError } from "./errors.mjs";
+import {
+  currentProgrammeVersionByCode,
+  seedPlacementRequirements,
+} from "./programmes.mjs";
 import { hasPermission, requirePermission } from "./rbac.mjs";
 import {
   assertDateRange,
@@ -55,6 +59,7 @@ const IMPORT_HEADERS = Object.freeze({
     allowed: [
       "studentExternalRef",
       "hostName",
+      "programmeCode",
       "periodName",
       "schoolTutorEmail",
       "hostTutorName",
@@ -314,6 +319,13 @@ function validatePlacementRows(db, user, rows) {
       errors,
     );
     const hostName = safeText(row.hostName, 200, number, "hostName", errors);
+    const programmeCode = safeText(
+      row.programmeCode,
+      40,
+      number,
+      "programmeCode",
+      errors,
+    ) || "VECTOR_DEFAULT";
     const periodName = safeText(row.periodName, 160, number, "periodName", errors);
     const schoolTutorEmail = optionalEmail(
       row.schoolTutorEmail,
@@ -327,6 +339,7 @@ function validatePlacementRows(db, user, rows) {
     for (const [field, value] of [
       ["studentExternalRef", studentExternalRef],
       ["hostName", hostName],
+      ["programmeCode", programmeCode],
     ]) {
       if (!value) errors.push(importError(number, field, "required"));
     }
@@ -342,6 +355,12 @@ function validatePlacementRows(db, user, rows) {
       number,
       errors,
     );
+    const programmeVersion = programmeCode
+      ? currentProgrammeVersionByCode(db, user.schoolId, programmeCode)
+      : null;
+    if (programmeCode && !programmeVersion) {
+      errors.push(importError(number, "programmeCode", "reference_not_found_or_inactive"));
+    }
     if (!isIsoDate(startDate) || !isIsoDate(endDate) || endDate < startDate) {
       errors.push(importError(number, "dates", "invalid_date_range"));
     } else {
@@ -396,6 +415,8 @@ function validatePlacementRows(db, user, rows) {
       hostId,
       periodId: periodId || null,
       schoolTutorId: schoolTutorId || null,
+      programmeVersionId: programmeVersion?.id ?? "",
+      programmeCode: programmeVersion?.programmeCode ?? programmeCode,
       hostTutorName: safeText(row.hostTutorName, 120, number, "hostTutorName", errors),
       hostTutorEmail,
       startDate,
@@ -466,8 +487,8 @@ function insertRows(db, user, resource, records, requestId) {
         INSERT INTO placements (
           id, school_id, student_id, host_id, period_id, school_tutor_id,
           host_tutor_name, host_tutor_email, start_date, end_date,
-          target_minutes, status, notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          target_minutes, status, notes, programme_version_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const record of records) {
         assertDateRange(record.startDate, record.endDate);
@@ -485,7 +506,15 @@ function insertRows(db, user, resource, records, requestId) {
           record.targetMinutes,
           record.status,
           record.notes,
+          record.programmeVersionId,
           now,
+          now,
+        );
+        seedPlacementRequirements(
+          db,
+          user.schoolId,
+          record.id,
+          record.programmeVersionId,
           now,
         );
       }
@@ -618,6 +647,9 @@ function exportRows(
     hostName: placement.hostName,
     schoolTutorId: placement.schoolTutorId,
     schoolTutorName: placement.schoolTutorName,
+    programmeCode: placement.programmeCode,
+    programmeName: placement.programmeName,
+    programmeVersion: placement.programmeVersion,
     startDate: placement.startDate,
     endDate: placement.endDate,
     targetHours: placement.targetHours,

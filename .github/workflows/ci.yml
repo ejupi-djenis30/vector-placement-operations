@@ -110,28 +110,63 @@ jobs:
           set -euo pipefail
           container_name="vector-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           volume_name="vector-ci-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          initialization_message="VECTOR initialization completed. Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from the environment and restart VECTOR before serving users."
+          retained_secret_message="VECTOR_BOOTSTRAP_ADMIN_PASSWORD must be removed after initialization. Remove it from the environment and restart VECTOR."
           cleanup() {
             docker rm --force "${container_name}" >/dev/null 2>&1 || true
             docker volume rm "${volume_name}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
           docker volume create "${volume_name}" >/dev/null
-          docker run --detach \
-            --name "${container_name}" \
+          runtime_args=(
             --read-only \
-            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --tmpfs "/tmp:rw,noexec,nosuid,size=64m" \
             --cap-drop ALL \
             --security-opt no-new-privileges:true \
             --pids-limit 256 \
-            --publish 127.0.0.1:4173:4173 \
             --mount "type=volume,source=${volume_name},target=/var/lib/vector" \
             --env NODE_ENV=production \
             --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
-            --env VECTOR_COOKIE_SECURE=false \
+            --env VECTOR_COOKIE_SECURE=false
+          )
+          bootstrap_args=(
             --env VECTOR_BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
             --env VECTOR_BOOTSTRAP_ADMIN_NAME="CI administrator" \
             --env VECTOR_BOOTSTRAP_ADMIN_PASSWORD="ci-only-vector-password-2026" \
-            --env VECTOR_SEED_SYNTHETIC=true \
+            --env VECTOR_SEED_SYNTHETIC=true
+          )
+          set +e
+          initialization_output="$(
+            docker run --rm \
+              "${runtime_args[@]}" \
+              "${bootstrap_args[@]}" \
+              "vector-ci:${GITHUB_SHA}" 2>&1
+          )"
+          initialization_status=$?
+          set -e
+          if [[ "${initialization_status}" == "0" ]] \
+            || ! grep --fixed-strings --quiet "${initialization_message}" <<<"${initialization_output}"; then
+            printf '%s\n' "${initialization_output}"
+            exit 1
+          fi
+          set +e
+          retained_secret_output="$(
+            docker run --rm \
+              "${runtime_args[@]}" \
+              "${bootstrap_args[@]}" \
+              "vector-ci:${GITHUB_SHA}" 2>&1
+          )"
+          retained_secret_status=$?
+          set -e
+          if [[ "${retained_secret_status}" == "0" ]] \
+            || ! grep --fixed-strings --quiet "${retained_secret_message}" <<<"${retained_secret_output}"; then
+            printf '%s\n' "${retained_secret_output}"
+            exit 1
+          fi
+          docker run --detach \
+            --name "${container_name}" \
+            --publish 127.0.0.1:4173:4173 \
+            "${runtime_args[@]}" \
             "vector-ci:${GITHUB_SHA}" >/dev/null
           for attempt in {1..30}; do
             if curl --fail --silent --show-error \

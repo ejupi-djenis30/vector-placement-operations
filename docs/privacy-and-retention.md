@@ -44,9 +44,13 @@ Imports and exports can broaden exposure quickly. Review
 - Give each staff member a named account.
 - Grant the least role and data scope needed for the person's work.
 - Limit school-wide administrator and coordinator access.
+- Treat the cohort coverage board as a school-wide planning view: it includes active students who
+  do not yet have a placement and is therefore unavailable to tutor accounts.
 - Review active accounts and assignments on a documented schedule.
 - Remove or disable access promptly when responsibilities change.
 - Protect administrator credentials with an institution-approved password process.
+- Set the absolute and inactivity session limits for the risks of shared school computers; neither
+  replaces signing out when leaving a device.
 - Review audit events for unexpected exports, bulk changes and administrative actions.
 - Keep support reports, screenshots and logs free of real records whenever possible.
 

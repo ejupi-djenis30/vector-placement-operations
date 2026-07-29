@@ -6,6 +6,43 @@ Notable changes to VECTOR are recorded here.
 
 - No unreleased changes.
 
+## 3.3.0 — 2026-07-26
+
+- Added a cohort coverage board that identifies active students without a placement, existing
+  coverage and overlapping placement conflicts for a selected cohort and period.
+- Added direct, prefilled placement creation from uncovered students so coordinators can close
+  planning gaps without returning to a separate register.
+- Added a server-enforced idle session timeout for safer use on shared school computers, with
+  configurable policy, session cleanup and operator guidance.
+- Corrected the public self-hosting quick path to reflect the required one-shot initialization
+  before the application begins serving users.
+
+## 3.2.0 — 2026-07-26
+
+- Added a role-scoped attention inbox for overdue evidence, pending hour reviews, placement
+  transitions and missing tutor assignments, with stable encrypted pagination and school-time-zone
+  deadline handling.
+- Made previously hidden check-in next actions, document dates/references and placement contact
+  details visible from the operational record.
+- Made production bootstrap a one-shot, fail-closed operation: VECTOR initializes the first school
+  without opening a listener, then requires the bootstrap secret to be removed before serving.
+- Removed sample institution identity values from the production environment template and updated
+  release acceptance to exercise initialization and serving as two separate phases.
+
+## 3.1.0 — 2026-07-26
+
+- Added school-managed placement programmes with immutable, auditable policy versions.
+- Made target hours, minimum check-ins and required evidence programme-specific while preserving
+  every existing VECTOR 3.0 placement through an automatic compatibility policy.
+- Added programme selection to placement creation, programme-aware readiness and atomic
+  `programmeCode` handling for CSV imports and placement exports.
+- Added administrator and coordinator controls for publishing policy versions without rewriting
+  the rules attached to existing placements.
+- Added a compact, complete version-history view and enforced explicit capacities of 200 programmes
+  per school and 100 immutable versions per programme.
+- Froze programme reassignment after any recorded time, check-in or non-placeholder evidence, while
+  limiting allowed reassignment cleanup to untouched requirement placeholders.
+
 ## 3.0.0 — 2026-07-26
 
 - Rebuilt VECTOR as a self-hosted, multi-user placement operations platform.

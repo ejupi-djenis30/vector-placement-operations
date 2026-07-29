@@ -38,6 +38,32 @@ async function waitFor(url, child) {
   throw new Error("VECTOR did not become ready.");
 }
 
+function spawnVector(root, environment) {
+  return spawn(
+    process.execPath,
+    ["--env-file-if-exists=.env", path.join(repository, "server", "index.mjs")],
+    {
+      cwd: root,
+      env: environment,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+}
+
+async function waitForExit(child) {
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  return { exitCode, stdout, stderr };
+}
+
 test("direct start loads production clean-install settings from .env", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "vector-clean-install-"));
   let child;
@@ -49,9 +75,11 @@ test("direct start loads production clean-install settings from .env", async (co
     }
     await rm(root, { recursive: true, force: true });
   });
+
   const databasePath = path.join(root, "data", "clean.sqlite");
   const port = await availablePort();
-  await writeFile(path.join(root, ".env"), [
+  const bootstrapPassword = "clean-install-password-2026";
+  const environmentLines = [
     "NODE_ENV=production",
     `VECTOR_ORIGIN=http://127.0.0.1:${port}`,
     "VECTOR_HOST=127.0.0.1",
@@ -62,35 +90,72 @@ test("direct start loads production clean-install settings from .env", async (co
     "VECTOR_BOOTSTRAP_TIME_ZONE=Europe/Zurich",
     "VECTOR_BOOTSTRAP_ADMIN_EMAIL=clean.admin@example.test",
     "VECTOR_BOOTSTRAP_ADMIN_NAME=Clean administrator",
-    "VECTOR_BOOTSTRAP_ADMIN_PASSWORD=clean-install-password-2026",
     "VECTOR_COOKIE_SECURE=false",
     "VECTOR_TRUST_PROXY=false",
     "VECTOR_SEED_SYNTHETIC=false",
     "VECTOR_LOG_LEVEL=silent",
-    "",
-  ].join("\n"));
+  ];
+  const writeEnvironment = async (password = "") => {
+    const lines = password
+      ? [...environmentLines, `VECTOR_BOOTSTRAP_ADMIN_PASSWORD=${password}`, ""]
+      : [...environmentLines, ""];
+    await writeFile(path.join(root, ".env"), lines.join("\n"), { mode: 0o600 });
+  };
   const environment = { ...process.env };
   for (const name of Object.keys(environment)) {
     if (name === "NODE_ENV" || name.startsWith("VECTOR_")) delete environment[name];
   }
-  child = spawn(
-    process.execPath,
-    ["--env-file-if-exists=.env", path.join(repository, "server", "index.mjs")],
-    {
-      cwd: root,
-      env: environment,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+
+  await writeEnvironment();
+  child = spawnVector(root, environment);
+  const missingSecret = await waitForExit(child);
+  assert.notEqual(missingSecret.exitCode, 0);
+  assert.match(
+    missingSecret.stderr,
+    /VECTOR_BOOTSTRAP_ADMIN_PASSWORD is required for a new database/,
   );
+
+  await writeEnvironment(bootstrapPassword);
+  child = spawnVector(root, environment);
+  const initialized = await waitForExit(child);
+  assert.notEqual(initialized.exitCode, 0);
+  assert.match(
+    initialized.stderr,
+    /initialization completed.*Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD.*restart VECTOR/is,
+  );
+  assert.equal(initialized.stderr.includes(bootstrapPassword), false);
+
+  let db = new Database(databasePath, { readonly: true, fileMustExist: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM schools").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM students").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM placements").get().count, 0);
+  db.close();
+
+  child = spawnVector(root, environment);
+  const retainedSecret = await waitForExit(child);
+  assert.notEqual(retainedSecret.exitCode, 0);
+  assert.match(
+    retainedSecret.stderr,
+    /VECTOR_BOOTSTRAP_ADMIN_PASSWORD must be removed.*restart VECTOR/is,
+  );
+  assert.equal(retainedSecret.stderr.includes(bootstrapPassword), false);
+
+  await writeEnvironment();
+  child = spawnVector(root, environment);
   await waitFor(`http://127.0.0.1:${port}/api/health/ready`, child);
   const branding = await fetch(`http://127.0.0.1:${port}/api/public/branding`)
     .then((response) => response.json());
   assert.equal(branding.schoolName, "Clean Install School");
   assert.equal(branding.timeZone, "Europe/Zurich");
-  const db = new Database(databasePath, { readonly: true, fileMustExist: true });
+
+  db = new Database(databasePath, { readonly: true, fileMustExist: true });
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM schools").get().count, 1);
-  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM students").get().count, 0);
-  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM placements").get().count, 0);
+  assert.equal(
+    db.prepare(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE action = 'installation.bootstrapped'",
+    ).get().count,
+    1,
+  );
   db.close();
 
   const packageJson = JSON.parse(

@@ -17,7 +17,7 @@ FROM node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc
 ARG VECTOR_BUILD_REVISION=unknown
 
 LABEL org.opencontainers.image.source="https://github.com/ejupi-djenis30/vector-placement-operations" \
-      org.opencontainers.image.version="3.0.0" \
+      org.opencontainers.image.version="3.3.0" \
       org.opencontainers.image.revision="${VECTOR_BUILD_REVISION}" \
       org.opencontainers.image.licenses="MIT"
 

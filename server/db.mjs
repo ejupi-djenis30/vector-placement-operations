@@ -219,8 +219,8 @@ function insertSyntheticDataset(db, schoolId, tutorId) {
     INSERT INTO placements (
       id, school_id, student_id, host_id, period_id, school_tutor_id,
       host_tutor_name, host_tutor_email, start_date, end_date, target_minutes,
-      status, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      status, notes, programme_version_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertTime = db.prepare(`
     INSERT INTO time_entries (
@@ -230,8 +230,9 @@ function insertSyntheticDataset(db, schoolId, tutorId) {
   `);
   const insertDocument = db.prepare(`
     INSERT INTO placement_documents (
-      id, school_id, placement_id, kind, title, status, reference, due_date, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, school_id, placement_id, kind, title, status, reference, due_date,
+      requirement_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (const [id, studentId, hostId, status, targetMinutes, loggedMinutes] of placements) {
@@ -249,6 +250,7 @@ function insertSyntheticDataset(db, schoolId, tutorId) {
       targetMinutes,
       status,
       "",
+      `programme_version_default_${schoolId}`,
       now,
       now,
     );
@@ -283,9 +285,28 @@ function insertSyntheticDataset(db, schoolId, tutorId) {
       status === "planned" ? "draft" : "signed",
       "",
       "2026-03-01",
+      `requirement_training_${schoolId}`,
       now,
       now,
     );
+    for (const [kind, title, requirementPrefix] of [
+      ["attendance_log", "Attendance log", "attendance"],
+      ["evaluation", "Evaluation", "evaluation"],
+    ]) {
+      insertDocument.run(
+        `document-${kind}-${id}`,
+        schoolId,
+        id,
+        kind,
+        title,
+        "missing",
+        "",
+        null,
+        `requirement_${requirementPrefix}_${schoolId}`,
+        now,
+        now,
+      );
+    }
   }
 
   writeAudit(db, {
