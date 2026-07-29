@@ -6,16 +6,29 @@ Notable changes to VECTOR are recorded here.
 
 - No unreleased changes.
 
-## 3.3.0 — 2026-07-26
+## 3.3.0 — 2026-07-29
 
-- Added a cohort coverage board that identifies active students without a placement, existing
-  coverage and overlapping placement conflicts for a selected cohort and period.
-- Added direct, prefilled placement creation from uncovered students so coordinators can close
-  planning gaps without returning to a separate register.
-- Added a server-enforced idle session timeout for safer use on shared school computers, with
-  configurable policy, session cleanup and operator guidance.
-- Corrected the public self-hosting quick path to reflect the required one-shot initialization
-  before the application begins serving users.
+- Added school-managed placement programmes with immutable policy versions for target hours,
+  check-ins and required evidence. Existing placements retain a compatibility policy, and published
+  rules stay attached to the records that used them.
+- Added programme-aware placement creation, CSV import, readiness checks and exports. Coordinators
+  can reassign an untouched placement, while VECTOR protects records that already contain hours,
+  check-ins or evidence.
+- Added a role-scoped attention inbox for overdue evidence, pending hour reviews, placement
+  transitions and missing tutor assignments. Deadlines follow the school's time zone and the
+  encrypted pagination cursor keeps queue order stable.
+- Exposed check-in next actions, document dates and references, and placement contact details
+  directly on the operational record.
+- Added a cohort coverage board that shows unplaced students, current coverage and overlapping
+  placement conflicts for a selected cohort and period.
+- Added direct, prefilled placement creation from uncovered students so coordinators can close a
+  planning gap without returning to a separate register.
+- Added a server-enforced idle session timeout for safer use on shared school computers, including
+  a configurable policy, session cleanup and operator guidance.
+- Made production initialization a one-shot, fail-closed operation. VECTOR creates the first school
+  without opening a listener and refuses to serve until the bootstrap secret has been removed.
+- Removed sample institution identity values from the production environment template and aligned
+  the self-hosting guide and release acceptance tests with the initialize-then-serve workflow.
 
 ## 3.2.0 — 2026-07-26
 
