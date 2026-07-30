@@ -4,6 +4,65 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function parseHexColor(value) {
+  assert(
+    /^#[0-9a-f]{6}$/i.test(value),
+    `Expected a six-digit hexadecimal colour, received ${value}.`,
+  );
+  return value
+    .slice(1)
+    .match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16));
+}
+
+function channelLuminance(channel) {
+  const value = channel / 255;
+  return value <= 0.04045
+    ? value / 12.92
+    : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(color) {
+  const [red, green, blue] = parseHexColor(color).map(channelLuminance);
+  return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+}
+
+export function blendHexColors(foreground, background, opacity) {
+  assert(
+    Number.isFinite(opacity) && opacity >= 0 && opacity <= 1,
+    "Colour blending opacity must be between zero and one.",
+  );
+  const foregroundChannels = parseHexColor(foreground);
+  const backgroundChannels = parseHexColor(background);
+  const channels = foregroundChannels.map((channel, index) =>
+    Math.round((channel * opacity) + (backgroundChannels[index] * (1 - opacity)))
+  );
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function contrastRatio(foreground, background) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  return (
+    Math.max(foregroundLuminance, backgroundLuminance) + 0.05
+  ) / (
+    Math.min(foregroundLuminance, backgroundLuminance) + 0.05
+  );
+}
+
+export function assertContrastRatio(
+  foreground,
+  background,
+  { label = "Colour pair", minimum = 4.5 } = {},
+) {
+  const ratio = contrastRatio(foreground, background);
+  assert(
+    ratio >= minimum,
+    `${label} contrast ratio ${ratio.toFixed(2)}:1 is below ${minimum.toFixed(2)}:1.`,
+  );
+  return ratio;
+}
+
 function visitHtml(node, visitor) {
   visitor(node);
   for (const child of node.childNodes ?? []) visitHtml(child, visitor);

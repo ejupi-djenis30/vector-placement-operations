@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertContrastRatio,
   assertExternalScriptsOnly,
   assertRobotsTxt,
   assertSecurityTxt,
   assertSitemapXml,
+  blendHexColors,
+  contrastRatio,
 } from "../scripts/site-validation.mjs";
 
 const document = (body) => `<!doctype html><html><head><title>Test</title></head><body>${body}</body></html>`;
@@ -111,5 +114,29 @@ test("publication metadata rejects root-scoped, non-canonical and stale values",
       },
     ),
     /Canonical URL is not project-scoped/i,
+  );
+});
+
+test("publication palette keeps normal text above WCAG AA contrast", () => {
+  const cream = "#f5efe5";
+  const ink = "#17324d";
+  const signalMeter = blendHexColors(cream, ink, 0.06);
+
+  assert.equal(signalMeter, "#243d56");
+  assert.ok(contrastRatio("#626e77", cream) >= 4.5);
+  assert.ok(contrastRatio("#ff8372", signalMeter) >= 4.5);
+  assert.throws(
+    () => assertContrastRatio("#66717a", cream, {
+      label: "Previous muted marketing copy",
+      minimum: 4.5,
+    }),
+    /contrast ratio 4\.36:1 is below 4\.50:1/,
+  );
+  assert.throws(
+    () => assertContrastRatio("#ff7563", signalMeter, {
+      label: "Previous signal-meter value",
+      minimum: 4.5,
+    }),
+    /contrast ratio 4\.25:1 is below 4\.50:1/,
   );
 });

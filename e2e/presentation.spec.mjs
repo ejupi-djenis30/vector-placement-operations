@@ -44,6 +44,30 @@ test("loads as an honest public presentation when the application API is unavail
   );
 });
 
+for (const width of [320, 390, 1440]) {
+  test(`keeps the public presentation inside a ${width}px viewport`, async ({ page }) => {
+    await page.setViewportSize({ width, height: width < 600 ? 844 : 900 });
+    await page.goto("./", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("[data-api-status]")).toContainText("public product page");
+
+    const layout = await page.evaluate(() => {
+      const heading = document.querySelector("h1").getBoundingClientRect();
+      return {
+        body: document.body.scrollWidth,
+        document: document.documentElement.scrollWidth,
+        headingLeft: heading.left,
+        headingRight: heading.right,
+        viewport: document.documentElement.clientWidth,
+      };
+    });
+
+    expect(layout.document).toBeLessThanOrEqual(layout.viewport);
+    expect(layout.body).toBeLessThanOrEqual(layout.viewport);
+    expect(layout.headingLeft).toBeGreaterThanOrEqual(0);
+    expect(layout.headingRight).toBeLessThanOrEqual(layout.viewport);
+  });
+}
+
 test.describe("mobile public presentation", () => {
   test.use({ viewport: { width: 320, height: 800 }, hasTouch: true, isMobile: true });
 

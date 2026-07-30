@@ -1,9 +1,11 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import {
+  assertContrastRatio,
   assertExternalScriptsOnly,
   assertRobotsTxt,
   assertSecurityTxt,
   assertSitemapXml,
+  blendHexColors,
 } from "./site-validation.mjs";
 
 const PROJECT_PATH = "/vector-placement-operations/";
@@ -20,6 +22,32 @@ const repositoryRoot = new URL("../", siteRoot);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function cssHexVariable(styles, name) {
+  const match = styles.match(new RegExp(`^\\s*${name}:\\s*(#[0-9a-f]{6});`, "im"));
+  assert(match, `site/styles.css is missing the ${name} hexadecimal colour token.`);
+  return match[1];
+}
+
+function cssSignalMeterSurface(styles) {
+  const match = styles.match(
+    /\.signal-meter\s*\{[^}]*background:\s*rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)\s*\)/,
+  );
+  assert(match, "site/styles.css is missing the signal-meter translucent surface.");
+  const channels = match.slice(1, 4).map(Number);
+  const opacity = Number(match[4]);
+  assert(
+    channels.every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255)
+      && Number.isFinite(opacity)
+      && opacity >= 0
+      && opacity <= 1,
+    "The signal-meter surface must use valid RGBA channels.",
+  );
+  const foreground = `#${channels
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")}`;
+  return { foreground, opacity };
 }
 
 async function listFiles(directory, prefix = "") {
@@ -206,6 +234,24 @@ for (const token of [
 ]) {
   assert(styles.includes(token), `site/styles.css is missing ${token}`);
 }
+const creamColor = cssHexVariable(styles, "--cream");
+const inkColor = cssHexVariable(styles, "--ink");
+const mutedColor = cssHexVariable(styles, "--muted");
+const coralBrightColor = cssHexVariable(styles, "--coral-bright");
+assertContrastRatio(mutedColor, creamColor, {
+  label: "Muted marketing copy",
+  minimum: 4.5,
+});
+const signalMeterSurface = cssSignalMeterSurface(styles);
+const signalMeterColor = blendHexColors(
+  signalMeterSurface.foreground,
+  inkColor,
+  signalMeterSurface.opacity,
+);
+assertContrastRatio(coralBrightColor, signalMeterColor, {
+  label: "Signal-meter value",
+  minimum: 4.5,
+});
 for (const [name, source] of [
   ["site/app.mjs", marketingApp],
   ["site/app/workspace.mjs", workspaceApp],
