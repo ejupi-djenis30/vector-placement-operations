@@ -47,6 +47,8 @@ h1 { max-width: 11ch; margin-bottom: 0; font-size: clamp(4rem, 7.7vw, 7.8rem); }
 h1 em, .control-copy em { color: var(--coral); font-family: Georgia, serif; font-weight: 400; }
 .lead { max-width: 40rem; margin: 2rem 0 0; color: var(--muted); font-size: clamp(1.06rem, 1.45vw, 1.25rem); line-height: 1.62; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 2rem; }
+.workspace-entry { display: inline-flex; align-items: center; min-height: 2.75rem; padding: .85rem .25rem; color: var(--muted); font-size: .72rem; font-weight: 850; letter-spacing: .08em; text-decoration: none; text-transform: uppercase; }
+.workspace-entry > span[aria-hidden] { color: var(--coral); }
 .button { display: inline-flex; gap: .55rem; align-items: center; justify-content: center; min-height: 3.2rem; padding: .85rem 1.2rem; border: 1px solid var(--ink); border-radius: 999px; font-size: .72rem; font-weight: 850; letter-spacing: .07em; text-decoration: none; text-transform: uppercase; }
 .button-primary { color: var(--paper); background: var(--ink); }
 .button-primary:hover { border-color: var(--coral); background: var(--coral); }
@@ -91,6 +93,7 @@ h1 em, .control-copy em { color: var(--coral); font-family: Georgia, serif; font
 .self-host h2 { margin-bottom: 0; }
 .self-host-copy { max-width: 38rem; color: var(--muted); line-height: 1.6; }
 .self-host-copy p + p { margin-top: 1rem; }
+.self-host-actions { display: flex; flex-wrap: wrap; gap: 1.15rem 1.6rem; align-items: center; }
 .code-strip { display: grid; gap: .55rem; margin: 2rem 0; padding: 1rem; border: 1px solid var(--line); background: rgba(255,250,242,.65); }
 .code-strip code { font-family: ui-monospace, Consolas, monospace; font-size: .76rem; }
 .text-link { color: var(--ink); font-size: .76rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }

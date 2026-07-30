@@ -21,9 +21,27 @@ test("loads as an honest public presentation when the application API is unavail
   await page.goto("./", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "Keep each placement accountable." })).toBeVisible();
   await expect(page.locator(".signal-path li")).toHaveCount(3);
+  await expect(page.getByRole("link", { name: /Start the installation/ })).toHaveAttribute("href", "#self-host");
+  await expect(page.getByRole("link", { name: /Download v3.3.0/ })).toHaveAttribute(
+    "href",
+    "https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.3.0",
+  );
   await expect(page.locator("[data-api-status]")).toContainText("public product page");
   await expect(page.locator("[data-workspace-link]").first()).toHaveAttribute("href", "#self-host");
+  await expect(page.locator("[data-workspace-link]").first()).toContainText("Installation required");
+  await expect(page.locator("[data-workspace-link]").first()).toHaveAttribute(
+    "aria-label",
+    "Installation required; read the self-hosting setup path",
+  );
   await expect(page.getByRole("heading", { name: "A public product page. A private workspace." })).toBeVisible();
+  await expect(page.getByRole("link", { name: /complete installation guide/ })).toHaveAttribute(
+    "href",
+    "https://github.com/ejupi-djenis30/vector-placement-operations/blob/main/docs/self-hosting.md",
+  );
+  await expect(page.getByRole("link", { name: /Get the v3.3.0 release/ })).toHaveAttribute(
+    "href",
+    "https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.3.0",
+  );
 });
 
 test.describe("mobile public presentation", () => {

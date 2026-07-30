@@ -19,7 +19,9 @@ async function detectInstallation() {
   status.textContent = "You are viewing the public product page. Run VECTOR self-hosted to sign in and use the workspace.";
   workspaceLinks.forEach((link) => {
     link.setAttribute("href", "#self-host");
-    link.setAttribute("aria-label", "Read the self-hosting setup path");
+    link.setAttribute("aria-label", "Installation required; read the self-hosting setup path");
+    const label = link.querySelector("[data-workspace-label]");
+    if (label) label.textContent = "Installation required";
   });
 }
 
