@@ -62,6 +62,85 @@ export function combinedOpacity(opacities) {
   }, 1);
 }
 
+export function splitCssTopLevelLayers(value) {
+  assert(
+    typeof value === "string" && value.trim().length > 0,
+    "A non-empty CSS background value is required.",
+  );
+
+  const layers = [];
+  let depth = 0;
+  let escaped = false;
+  let quote = "";
+  let start = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+    if (character === ")") {
+      assert(depth > 0, `Unbalanced CSS background value: ${value}.`);
+      depth -= 1;
+      continue;
+    }
+    if (character !== "," || depth !== 0) continue;
+    layers.push(value.slice(start, index).trim());
+    start = index + 1;
+  }
+
+  assert(!quote && depth === 0, `Unbalanced CSS background value: ${value}.`);
+  layers.push(value.slice(start).trim());
+  assert(
+    layers.every((layer) => layer.length > 0),
+    `CSS background layers must not be empty: ${value}.`,
+  );
+  return layers;
+}
+
+export function assertCssBackgroundLayers(
+  value,
+  { expected, label = "CSS background" },
+) {
+  assert(
+    Array.isArray(expected) && expected.length > 0,
+    `${label} requires at least one expected layer.`,
+  );
+  const actual = splitCssTopLevelLayers(value);
+  assert(
+    actual.length === expected.length,
+    `${label} must use exactly ${expected.length} top-level layers, found ${actual.length}.`,
+  );
+  expected.forEach((expectation, index) => {
+    const layer = actual[index];
+    let matches = layer === expectation;
+    if (expectation instanceof RegExp) {
+      expectation.lastIndex = 0;
+      matches = expectation.test(layer);
+    }
+    assert(
+      matches,
+      `${label} layer ${index + 1} does not match its required structure: ${layer}.`,
+    );
+  });
+  return actual;
+}
+
 export function cssSelectorDeclaration(styles, selector, property) {
   const cleanStyles = styles.replace(/\/\*[\s\S]*?\*\//g, "");
   const declarations = [];

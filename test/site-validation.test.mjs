@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertCssBackgroundLayers,
   assertCssSelectorDeclaration,
   assertContrastRatio,
   assertExternalScriptsOnly,
@@ -188,5 +189,60 @@ test("publication colour contracts reject a later selector override", () => {
       },
     ),
     /must set color to var\(--muted\)/i,
+  );
+});
+
+test("publication background contracts reject opaque and additional layers", () => {
+  const verticalGrid =
+    /^linear-gradient\(\s*rgba\([^)]*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+  const horizontalGrid =
+    /^linear-gradient\(\s*90deg\s*,\s*rgba\([^)]*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+  const body = [
+    "linear-gradient(rgba(23, 50, 77, .04) 1px, transparent 1px)",
+    "linear-gradient(90deg, rgba(23, 50, 77, .04) 1px, transparent 1px)",
+    "var(--cream)",
+  ].join(", ");
+  const meter = "rgba(245, 239, 229, .06)";
+
+  assert.deepEqual(
+    assertCssBackgroundLayers(body, {
+      expected: [verticalGrid, horizontalGrid, "var(--cream)"],
+      label: "Body background",
+    }),
+    [
+      "linear-gradient(rgba(23, 50, 77, .04) 1px, transparent 1px)",
+      "linear-gradient(90deg, rgba(23, 50, 77, .04) 1px, transparent 1px)",
+      "var(--cream)",
+    ],
+  );
+  assert.throws(
+    () => assertCssBackgroundLayers(
+      `linear-gradient(#000, #000), ${body}`,
+      {
+        expected: [verticalGrid, horizontalGrid, "var(--cream)"],
+        label: "Body background",
+      },
+    ),
+    /exactly 3 top-level layers, found 4/i,
+  );
+  assert.throws(
+    () => assertCssBackgroundLayers(
+      body.replace("transparent 1px", "#000 1px"),
+      {
+        expected: [verticalGrid, horizontalGrid, "var(--cream)"],
+        label: "Body background",
+      },
+    ),
+    /layer 1 does not match its required structure/i,
+  );
+  assert.throws(
+    () => assertCssBackgroundLayers(
+      `linear-gradient(#fff, #fff), ${meter}`,
+      {
+        expected: [/^rgba\([^)]*\)$/i],
+        label: "Signal-meter background",
+      },
+    ),
+    /exactly 1 top-level layers, found 2/i,
   );
 });

@@ -1,5 +1,6 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import {
+  assertCssBackgroundLayers,
   assertCssSelectorDeclaration,
   assertContrastRatio,
   assertExternalScriptsOnly,
@@ -237,6 +238,12 @@ const creamColor = cssHexVariable(styles, "--cream");
 const inkColor = cssHexVariable(styles, "--ink");
 const mutedColor = cssHexVariable(styles, "--muted");
 const coralBrightColor = cssHexVariable(styles, "--coral-bright");
+const verticalGridLayer =
+  /^linear-gradient\(\s*rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0?\.)?\d+\s*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+const horizontalGridLayer =
+  /^linear-gradient\(\s*90deg\s*,\s*rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0?\.)?\d+\s*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+const translucentColorLayer =
+  /^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0?\.)?\d+\s*\)$/i;
 for (const selector of [
   ".lead",
   ".workspace-entry",
@@ -281,6 +288,10 @@ assertCssSelectorDeclaration(styles, {
 });
 
 const bodyBackground = cssSelectorDeclaration(styles, "body", "background");
+assertCssBackgroundLayers(bodyBackground, {
+  expected: [verticalGridLayer, horizontalGridLayer, "var(--cream)"],
+  label: "Public page body background",
+});
 const bodyGridLayers = parseCssRgbaLayers(bodyBackground);
 assert(
   bodyBackground.endsWith("var(--cream)"),
@@ -308,6 +319,10 @@ const signalGridBackground = cssSelectorDeclaration(
   ".signal-grid",
   "background",
 );
+assertCssBackgroundLayers(signalGridBackground, {
+  expected: [verticalGridLayer, horizontalGridLayer],
+  label: "Signal-grid background",
+});
 const signalGridLayers = parseCssRgbaLayers(signalGridBackground);
 assert(signalGridLayers.length === 2, "The signal board must use exactly two grid layers.");
 for (const [index, layer] of signalGridLayers.entries()) {
@@ -337,6 +352,10 @@ const signalMeterBackground = cssSelectorDeclaration(
   ".signal-meter",
   "background",
 );
+assertCssBackgroundLayers(signalMeterBackground, {
+  expected: [translucentColorLayer],
+  label: "Signal-meter background",
+});
 const signalMeterLayers = parseCssRgbaLayers(signalMeterBackground);
 assert(
   signalMeterLayers.length === 1,

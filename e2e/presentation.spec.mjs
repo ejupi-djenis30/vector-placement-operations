@@ -1,6 +1,72 @@
 import { expect, test } from "@playwright/test";
 
 const runtimeErrors = new WeakMap();
+const PUBLIC_VIEWPORTS = [
+  { height: 844, width: 320 },
+  { height: 844, width: 390 },
+  { height: 900, width: 1440 },
+];
+const MUTED_SELECTORS = [
+  ".lead",
+  ".workspace-entry",
+  ".availability",
+  ".workflow-grid p",
+  ".control-list dd",
+  ".self-host-copy",
+  ".site-footer p",
+];
+
+async function readPublicationPalette(page) {
+  return page.evaluate((mutedSelectors) => {
+    const splitLayers = (value) => {
+      const layers = [];
+      let depth = 0;
+      let start = 0;
+      for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === "(") depth += 1;
+        if (value[index] === ")") depth -= 1;
+        if (value[index] !== "," || depth !== 0) continue;
+        layers.push(value.slice(start, index).trim());
+        start = index + 1;
+      }
+      layers.push(value.slice(start).trim());
+      return layers;
+    };
+    const root = getComputedStyle(document.documentElement);
+    const computed = (selector) => getComputedStyle(document.querySelector(selector));
+    return {
+      bodyBackground: getComputedStyle(document.body).backgroundColor,
+      bodyImages: splitLayers(getComputedStyle(document.body).backgroundImage),
+      coralBrightToken: root.getPropertyValue("--coral-bright").trim(),
+      mutedColors: Object.fromEntries(mutedSelectors.map((selector) => [
+        selector,
+        [...document.querySelectorAll(selector)]
+          .map((element) => getComputedStyle(element).color),
+      ])),
+      mutedToken: root.getPropertyValue("--muted").trim(),
+      signalBoard: computed(".signal-board").backgroundColor,
+      signalGridBackground: computed(".signal-grid").backgroundColor,
+      signalGridImages: splitLayers(computed(".signal-grid").backgroundImage),
+      signalGridOpacity: computed(".signal-grid").opacity,
+      signalIndicator: computed(".signal-topline i").backgroundColor,
+      signalIndicatorGlow: computed(".signal-topline i").boxShadow,
+      signalMeter: computed(".signal-meter").backgroundColor,
+      signalMeterImage: computed(".signal-meter").backgroundImage,
+      signalMeterValue: computed(".signal-meter b").color,
+    };
+  }, MUTED_SELECTORS);
+}
+
+async function mutatePublicationStyles(page, mutation) {
+  await page.route("**/styles.css", async (route) => {
+    const response = await route.fetch();
+    const styles = await response.text();
+    await route.fulfill({
+      body: `${styles}\n${mutation}\n`,
+      response,
+    });
+  });
+}
 
 test.beforeEach(async ({ page }) => {
   const errors = [];
@@ -44,52 +110,80 @@ test("loads as an honest public presentation when the application API is unavail
   );
 });
 
-test("resolves the publication palette through the browser cascade", async ({ page }) => {
+for (const viewport of PUBLIC_VIEWPORTS) {
+  test(`resolves every publication colour and background layer at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("./", { waitUntil: "domcontentloaded" });
+
+    const palette = await readPublicationPalette(page);
+
+    expect(palette.mutedToken).toBe("#56626b");
+    for (const selector of MUTED_SELECTORS) {
+      expect(palette.mutedColors[selector].length, `${selector} must resolve at least once`).toBeGreaterThan(0);
+      expect(new Set(palette.mutedColors[selector]), `${selector} must resolve through the cascade`)
+        .toEqual(new Set(["rgb(86, 98, 107)"]));
+    }
+    expect(palette.coralBrightToken).toBe("#ffa599");
+    expect(palette.signalMeterValue).toBe("rgb(255, 165, 153)");
+    expect(palette.signalIndicator).toBe("rgb(255, 165, 153)");
+    expect(palette.signalIndicatorGlow).toContain("rgba(255, 165, 153, 0.15)");
+    expect(palette.bodyBackground).toBe("rgb(245, 239, 229)");
+    expect(palette.bodyImages).toEqual([
+      "linear-gradient(rgba(23, 50, 77, 0.04) 1px, rgba(0, 0, 0, 0) 1px)",
+      "linear-gradient(90deg, rgba(23, 50, 77, 0.04) 1px, rgba(0, 0, 0, 0) 1px)",
+      "none",
+    ]);
+    expect(palette.signalBoard).toBe("rgb(23, 50, 77)");
+    expect(palette.signalGridBackground).toBe("rgba(0, 0, 0, 0)");
+    expect(palette.signalGridImages).toEqual([
+      "linear-gradient(rgba(245, 239, 229, 0.055) 1px, rgba(0, 0, 0, 0) 1px)",
+      "linear-gradient(90deg, rgba(245, 239, 229, 0.055) 1px, rgba(0, 0, 0, 0) 1px)",
+    ]);
+    expect(palette.signalGridOpacity).toBe("0.9");
+    expect(palette.signalMeter).toBe("rgba(245, 239, 229, 0.06)");
+    expect(palette.signalMeterImage).toBe("none");
+  });
+}
+
+test("detects responsive, per-instance and opaque-layer palette mutations", async ({ page }) => {
+  await page.setViewportSize({ height: 844, width: 320 });
+  await mutatePublicationStyles(page, `
+    @media (max-width: 620px) {
+      .marketing-page .lead { color: #ffffff; }
+    }
+    .control-list div:nth-child(2) dd { color: #ffffff; }
+    body.marketing-page {
+      background-image:
+        linear-gradient(#000000, #000000),
+        linear-gradient(rgba(23, 50, 77, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23, 50, 77, 0.04) 1px, transparent 1px),
+        none;
+    }
+    .signal-meter { background-image: linear-gradient(#ffffff, #ffffff); }
+  `);
   await page.goto("./", { waitUntil: "domcontentloaded" });
 
-  const palette = await page.evaluate(() => {
-    const root = getComputedStyle(document.documentElement);
-    const mutedSelectors = [
-      ".lead",
-      ".workspace-entry",
-      ".availability",
-      ".workflow-grid p",
-      ".control-list dd",
-      ".self-host-copy",
-      ".site-footer p",
-    ];
-    const computed = (selector) => getComputedStyle(document.querySelector(selector));
-    return {
-      bodyGrid: getComputedStyle(document.body).backgroundImage,
-      coralBrightToken: root.getPropertyValue("--coral-bright").trim(),
-      mutedColors: mutedSelectors.map((selector) => computed(selector).color),
-      mutedToken: root.getPropertyValue("--muted").trim(),
-      signalBoard: computed(".signal-board").backgroundColor,
-      signalGrid: computed(".signal-grid").backgroundImage,
-      signalGridOpacity: computed(".signal-grid").opacity,
-      signalIndicator: computed(".signal-topline i").backgroundColor,
-      signalIndicatorGlow: computed(".signal-topline i").boxShadow,
-      signalMeter: computed(".signal-meter").backgroundColor,
-      signalMeterValue: computed(".signal-meter b").color,
-    };
-  });
+  const palette = await readPublicationPalette(page);
 
-  expect(palette.mutedToken).toBe("#56626b");
-  expect(new Set(palette.mutedColors)).toEqual(new Set(["rgb(86, 98, 107)"]));
-  expect(palette.coralBrightToken).toBe("#ffa599");
-  expect(palette.signalMeterValue).toBe("rgb(255, 165, 153)");
-  expect(palette.signalIndicator).toBe("rgb(255, 165, 153)");
-  expect(palette.signalIndicatorGlow).toContain("rgba(255, 165, 153, 0.15)");
-  expect(palette.signalBoard).toBe("rgb(23, 50, 77)");
-  expect(palette.signalGridOpacity).toBe("0.9");
-  expect(palette.signalMeter).toBe("rgba(245, 239, 229, 0.06)");
-  expect(palette.bodyGrid.match(/rgba\(23, 50, 77, 0\.04\)/g)).toHaveLength(2);
-  expect(palette.signalGrid.match(/rgba\(245, 239, 229, 0\.055\)/g)).toHaveLength(2);
+  expect(palette.mutedColors[".lead"]).toEqual(["rgb(255, 255, 255)"]);
+  expect(palette.mutedColors[".control-list dd"]).toEqual([
+    "rgb(86, 98, 107)",
+    "rgb(255, 255, 255)",
+    "rgb(86, 98, 107)",
+    "rgb(86, 98, 107)",
+  ]);
+  expect(palette.bodyImages).toHaveLength(4);
+  expect(palette.bodyImages[0]).toBe(
+    "linear-gradient(rgb(0, 0, 0), rgb(0, 0, 0))",
+  );
+  expect(palette.signalMeterImage).toBe(
+    "linear-gradient(rgb(255, 255, 255), rgb(255, 255, 255))",
+  );
 });
 
-for (const width of [320, 390, 1440]) {
-  test(`keeps the public presentation inside a ${width}px viewport`, async ({ page }) => {
-    await page.setViewportSize({ width, height: width < 600 ? 844 : 900 });
+for (const viewport of PUBLIC_VIEWPORTS) {
+  test(`keeps the public presentation inside a ${viewport.width}px viewport`, async ({ page }) => {
+    await page.setViewportSize(viewport);
     await page.goto("./", { waitUntil: "domcontentloaded" });
     await expect(page.locator("[data-api-status]")).toContainText("public product page");
 
