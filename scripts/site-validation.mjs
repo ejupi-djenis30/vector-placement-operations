@@ -4,6 +4,10 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function parseHexColor(value) {
   assert(
     /^#[0-9a-f]{6}$/i.test(value),
@@ -38,6 +42,85 @@ export function blendHexColors(foreground, background, opacity) {
     Math.round((channel * opacity) + (backgroundChannels[index] * (1 - opacity)))
   );
   return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function blendHexColorLayers(background, layers) {
+  return layers.reduce(
+    (surface, { color, opacity }) => blendHexColors(color, surface, opacity),
+    background,
+  );
+}
+
+export function combinedOpacity(opacities) {
+  assert(opacities.length > 0, "At least one opacity is required.");
+  return 1 - opacities.reduce((transparency, opacity) => {
+    assert(
+      Number.isFinite(opacity) && opacity >= 0 && opacity <= 1,
+      "Combined opacity values must be between zero and one.",
+    );
+    return transparency * (1 - opacity);
+  }, 1);
+}
+
+export function cssSelectorDeclaration(styles, selector, property) {
+  const cleanStyles = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+  const declarations = [];
+  const propertyPattern = new RegExp(
+    `(?:^|;)\\s*${escapeRegExp(property)}\\s*:\\s*([^;}]+)`,
+    "gi",
+  );
+
+  for (const match of cleanStyles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = match[1].split(",").map((value) => value.trim());
+    if (!selectors.includes(selector)) continue;
+    for (const declaration of match[2].matchAll(propertyPattern)) {
+      declarations.push(declaration[1].trim().replace(/\s+/g, " "));
+    }
+  }
+
+  assert(
+    declarations.length === 1,
+    `Expected exactly one ${property} declaration for ${selector}, found ${declarations.length}.`,
+  );
+  return declarations[0];
+}
+
+export function assertCssSelectorDeclaration(
+  styles,
+  { expected, property, selector },
+) {
+  const actual = cssSelectorDeclaration(styles, selector, property);
+  assert(
+    actual === expected,
+    `${selector} must set ${property} to ${expected}, received ${actual}.`,
+  );
+  return actual;
+}
+
+export function parseCssRgbaLayers(value) {
+  const matches = [...value.matchAll(
+    /rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)\s*\)/gi,
+  )];
+  assert(matches.length > 0, `Expected at least one RGBA colour layer, received ${value}.`);
+  return matches.map((match) => {
+    const channels = match.slice(1, 4).map(Number);
+    const opacity = Number(match[4]);
+    assert(
+      channels.every((channel) =>
+        Number.isInteger(channel) && channel >= 0 && channel <= 255
+      )
+        && Number.isFinite(opacity)
+        && opacity >= 0
+        && opacity <= 1,
+      `Invalid RGBA colour layer in ${value}.`,
+    );
+    return {
+      color: `#${channels
+        .map((channel) => channel.toString(16).padStart(2, "0"))
+        .join("")}`,
+      opacity,
+    };
+  });
 }
 
 export function contrastRatio(foreground, background) {
