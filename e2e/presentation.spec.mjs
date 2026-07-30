@@ -49,6 +49,7 @@ test.describe("mobile public presentation", () => {
 
   test("remains inside the viewport without an API-backed workspace", async ({ page }) => {
     await page.goto("./", { waitUntil: "domcontentloaded" });
+    await page.locator(".skip-link").focus();
     const dimensions = await page.evaluate(() => ({
       viewport: document.documentElement.clientWidth,
       document: document.documentElement.scrollWidth,
@@ -57,5 +58,37 @@ test.describe("mobile public presentation", () => {
     expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport);
     expect(dimensions.body).toBeLessThanOrEqual(dimensions.viewport);
     await expect(page.locator("[data-api-status]")).toContainText("public product page");
+  });
+
+  test("keeps every public action large enough to tap", async ({ page }) => {
+    await page.goto("./", { waitUntil: "domcontentloaded" });
+    await page.locator(".skip-link").focus();
+
+    const undersized = await page
+      .locator(
+        [
+          ".skip-link",
+          ".site-header .brand",
+          ".header-action",
+          ".hero-actions a",
+          ".self-host-actions a",
+          ".site-footer a",
+        ].join(","),
+      )
+      .evaluateAll((elements) =>
+        elements
+          .filter((element) => element.getClientRects().length > 0)
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              height: rect.height,
+              label: element.getAttribute("aria-label") ?? element.textContent.trim(),
+              width: rect.width,
+            };
+          })
+          .filter(({ height, width }) => height < 44 || width < 44),
+      );
+
+    expect(undersized).toEqual([]);
   });
 });
