@@ -4,9 +4,9 @@
   --cream: #f5efe5;
   --paper: #fffaf2;
   --coral: #bc3c2c;
-  --coral-bright: #ff7563;
+  --coral-bright: #ffa599;
   --sage: #3b735b;
-  --muted: #66717a;
+  --muted: #56626b;
   --line: rgba(23, 50, 77, .16);
   --shadow: 0 24px 70px rgba(23, 50, 77, .16);
   color: var(--ink);
@@ -60,7 +60,7 @@ h1 em, .control-copy em { color: var(--coral); font-family: Georgia, serif; font
 .signal-grid { position: absolute; inset: 0; z-index: -1; opacity: .9; background: linear-gradient(rgba(245,239,229,.055) 1px,transparent 1px), linear-gradient(90deg,rgba(245,239,229,.055) 1px,transparent 1px); background-position: -1px -1px; background-size: 3.25rem 3.25rem; }
 .signal-topline, .signal-topline b, .signal-caption { display: flex; justify-content: space-between; gap: 1rem; color: rgba(245,239,229,.6); font-family: ui-monospace, Consolas, monospace; font-size: .61rem; font-weight: 800; letter-spacing: .1em; }
 .signal-topline b { color: var(--paper); }
-.signal-topline i { display: inline-block; width: .5rem; height: .5rem; margin-right: .4rem; border-radius: 50%; background: var(--coral-bright); box-shadow: 0 0 0 .25rem rgba(255,117,99,.15); }
+.signal-topline i { display: inline-block; width: .5rem; height: .5rem; margin-right: .4rem; border-radius: 50%; background: var(--coral-bright); box-shadow: 0 0 0 .25rem rgba(255,165,153,.15); }
 .signal-path { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: .7rem; align-items: center; margin: 0; padding: 0; list-style: none; }
 .signal-path::before { position: absolute; right: 10%; left: 10%; height: 1px; background: rgba(245,239,229,.24); content: ""; }
 .signal-path li { position: relative; display: grid; align-content: center; justify-items: center; min-height: 11.5rem; padding: 1rem; border: 1px solid rgba(245,239,229,.17); border-radius: 1rem; background: rgba(16,38,58,.9); text-align: center; }

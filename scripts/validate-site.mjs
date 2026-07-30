@@ -1,9 +1,17 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import {
+  assertCssBackgroundLayers,
+  assertCssSelectorDeclaration,
+  assertContrastRatio,
   assertExternalScriptsOnly,
   assertRobotsTxt,
   assertSecurityTxt,
   assertSitemapXml,
+  blendHexColorLayers,
+  blendHexColors,
+  combinedOpacity,
+  cssSelectorDeclaration,
+  parseCssRgbaLayers,
 } from "./site-validation.mjs";
 
 const PROJECT_PATH = "/vector-placement-operations/";
@@ -20,6 +28,26 @@ const repositoryRoot = new URL("../", siteRoot);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function cssHexVariable(styles, name) {
+  const value = cssSelectorDeclaration(styles, ":root", name);
+  assert(
+    /^#[0-9a-f]{6}$/i.test(value),
+    `site/styles.css must define ${name} as a six-digit hexadecimal colour.`,
+  );
+  return value;
+}
+
+function assertColorLayer(
+  layer,
+  { color, label, opacity },
+) {
+  assert(
+    layer.color.toLowerCase() === color.toLowerCase()
+      && layer.opacity === opacity,
+    `${label} must use ${color} at ${opacity} opacity.`,
+  );
 }
 
 async function listFiles(directory, prefix = "") {
@@ -206,6 +234,146 @@ for (const token of [
 ]) {
   assert(styles.includes(token), `site/styles.css is missing ${token}`);
 }
+const creamColor = cssHexVariable(styles, "--cream");
+const inkColor = cssHexVariable(styles, "--ink");
+const mutedColor = cssHexVariable(styles, "--muted");
+const coralBrightColor = cssHexVariable(styles, "--coral-bright");
+const verticalGridLayer =
+  /^linear-gradient\(\s*rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0?\.)?\d+\s*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+const horizontalGridLayer =
+  /^linear-gradient\(\s*90deg\s*,\s*rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0?\.)?\d+\s*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+const translucentColorLayer =
+  /^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0?\.)?\d+\s*\)$/i;
+for (const selector of [
+  ".lead",
+  ".workspace-entry",
+  ".availability",
+  ".workflow-grid p",
+  ".control-list dd",
+  ".self-host-copy",
+  ".site-footer p",
+]) {
+  assertCssSelectorDeclaration(styles, {
+    expected: "var(--muted)",
+    property: "color",
+    selector,
+  });
+}
+assertCssSelectorDeclaration(styles, {
+  expected: "var(--coral-bright)",
+  property: "color",
+  selector: ".signal-meter b",
+});
+assertCssSelectorDeclaration(styles, {
+  expected: "var(--coral-bright)",
+  property: "background",
+  selector: ".signal-topline i",
+});
+const signalIndicatorGlow = parseCssRgbaLayers(
+  cssSelectorDeclaration(styles, ".signal-topline i", "box-shadow"),
+);
+assert(
+  signalIndicatorGlow.length === 1,
+  "The signal indicator must use exactly one translucent glow.",
+);
+assertColorLayer(signalIndicatorGlow[0], {
+  color: coralBrightColor,
+  label: "Signal indicator glow",
+  opacity: 0.15,
+});
+assertCssSelectorDeclaration(styles, {
+  expected: "var(--ink)",
+  property: "background",
+  selector: ".signal-board",
+});
+
+const bodyBackground = cssSelectorDeclaration(styles, "body", "background");
+assertCssBackgroundLayers(bodyBackground, {
+  expected: [verticalGridLayer, horizontalGridLayer, "var(--cream)"],
+  label: "Public page body background",
+});
+const bodyGridLayers = parseCssRgbaLayers(bodyBackground);
+assert(
+  bodyBackground.endsWith("var(--cream)"),
+  "The public page body grid must resolve over var(--cream).",
+);
+assert(bodyGridLayers.length === 2, "The public page body must use exactly two grid layers.");
+for (const [index, layer] of bodyGridLayers.entries()) {
+  assertColorLayer(layer, {
+    color: inkColor,
+    label: `Body grid layer ${index + 1}`,
+    opacity: 0.04,
+  });
+}
+const bodyGridIntersection = blendHexColorLayers(
+  creamColor,
+  [...bodyGridLayers].reverse(),
+);
+assertContrastRatio(mutedColor, bodyGridIntersection, {
+  label: "Muted marketing copy",
+  minimum: 4.5,
+});
+
+const signalGridBackground = cssSelectorDeclaration(
+  styles,
+  ".signal-grid",
+  "background",
+);
+assertCssBackgroundLayers(signalGridBackground, {
+  expected: [verticalGridLayer, horizontalGridLayer],
+  label: "Signal-grid background",
+});
+const signalGridLayers = parseCssRgbaLayers(signalGridBackground);
+assert(signalGridLayers.length === 2, "The signal board must use exactly two grid layers.");
+for (const [index, layer] of signalGridLayers.entries()) {
+  assertColorLayer(layer, {
+    color: creamColor,
+    label: `Signal grid layer ${index + 1}`,
+    opacity: 0.055,
+  });
+}
+const signalGridElementOpacity = Number(
+  cssSelectorDeclaration(styles, ".signal-grid", "opacity"),
+);
+assert(
+  signalGridElementOpacity === 0.9,
+  "The signal-grid element opacity must remain 0.9.",
+);
+const signalGridOpacity =
+  combinedOpacity(signalGridLayers.map(({ opacity }) => opacity))
+  * signalGridElementOpacity;
+const signalGridIntersection = blendHexColors(
+  creamColor,
+  inkColor,
+  signalGridOpacity,
+);
+const signalMeterBackground = cssSelectorDeclaration(
+  styles,
+  ".signal-meter",
+  "background",
+);
+assertCssBackgroundLayers(signalMeterBackground, {
+  expected: [translucentColorLayer],
+  label: "Signal-meter background",
+});
+const signalMeterLayers = parseCssRgbaLayers(signalMeterBackground);
+assert(
+  signalMeterLayers.length === 1,
+  "The signal meter must use exactly one translucent surface layer.",
+);
+assertColorLayer(signalMeterLayers[0], {
+  color: creamColor,
+  label: "Signal-meter surface",
+  opacity: 0.06,
+});
+const signalMeterIntersection = blendHexColorLayers(
+  signalGridIntersection,
+  signalMeterLayers,
+);
+assertContrastRatio(coralBrightColor, signalMeterIntersection, {
+  label: "Signal-meter value",
+  minimum: 4.5,
+});
 for (const [name, source] of [
   ["site/app.mjs", marketingApp],
   ["site/app/workspace.mjs", workspaceApp],

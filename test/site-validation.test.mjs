@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertCssBackgroundLayers,
+  assertCssSelectorDeclaration,
+  assertContrastRatio,
   assertExternalScriptsOnly,
   assertRobotsTxt,
   assertSecurityTxt,
   assertSitemapXml,
+  blendHexColorLayers,
+  blendHexColors,
+  combinedOpacity,
+  contrastRatio,
 } from "../scripts/site-validation.mjs";
 
 const document = (body) => `<!doctype html><html><head><title>Test</title></head><body>${body}</body></html>`;
@@ -111,5 +118,131 @@ test("publication metadata rejects root-scoped, non-canonical and stale values",
       },
     ),
     /Canonical URL is not project-scoped/i,
+  );
+});
+
+test("publication palette keeps normal text above WCAG AA across both grid intersections", () => {
+  const cream = "#f5efe5";
+  const ink = "#17324d";
+  const bodyGrid = blendHexColorLayers(cream, [
+    { color: ink, opacity: 0.04 },
+    { color: ink, opacity: 0.04 },
+  ]);
+  const signalGridOpacity = combinedOpacity([0.055, 0.055]) * 0.9;
+  const signalGrid = blendHexColors(cream, ink, signalGridOpacity);
+  const signalMeter = blendHexColors(cream, signalGrid, 0.06);
+
+  assert.equal(bodyGrid, "#e3e0d9");
+  assert.equal(signalGrid, "#2c445c");
+  assert.equal(signalMeter, "#384e64");
+  assert.ok(contrastRatio("#56626b", bodyGrid) >= 4.5);
+  assert.ok(contrastRatio("#ffa599", signalMeter) >= 4.5);
+  assert.throws(
+    () => assertContrastRatio("#626e77", bodyGrid, {
+      label: "Previous muted marketing copy",
+      minimum: 4.5,
+    }),
+    /contrast ratio 3\.97:1 is below 4\.50:1/,
+  );
+  assert.throws(
+    () => assertContrastRatio("#ff8372", signalMeter, {
+      label: "Previous signal-meter value",
+      minimum: 4.5,
+    }),
+    /contrast ratio 3\.58:1 is below 4\.50:1/,
+  );
+});
+
+test("publication colour contracts reject a later selector override", () => {
+  const contract = [
+    ":root { --muted: #56626b; }",
+    ".lead { color: var(--muted); }",
+    ".signal-meter b { color: var(--coral-bright); }",
+  ].join("\n");
+
+  assert.equal(
+    assertCssSelectorDeclaration(contract, {
+      expected: "var(--muted)",
+      property: "color",
+      selector: ".lead",
+    }),
+    "var(--muted)",
+  );
+  assert.throws(
+    () => assertCssSelectorDeclaration(
+      `${contract}\n.other, .lead { color: #ffffff; }`,
+      {
+        expected: "var(--muted)",
+        property: "color",
+        selector: ".lead",
+      },
+    ),
+    /exactly one color declaration.*found 2/i,
+  );
+  assert.throws(
+    () => assertCssSelectorDeclaration(
+      contract.replace("var(--muted)", "#626e77"),
+      {
+        expected: "var(--muted)",
+        property: "color",
+        selector: ".lead",
+      },
+    ),
+    /must set color to var\(--muted\)/i,
+  );
+});
+
+test("publication background contracts reject opaque and additional layers", () => {
+  const verticalGrid =
+    /^linear-gradient\(\s*rgba\([^)]*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+  const horizontalGrid =
+    /^linear-gradient\(\s*90deg\s*,\s*rgba\([^)]*\)\s+1px\s*,\s*transparent\s+1px\s*\)$/i;
+  const body = [
+    "linear-gradient(rgba(23, 50, 77, .04) 1px, transparent 1px)",
+    "linear-gradient(90deg, rgba(23, 50, 77, .04) 1px, transparent 1px)",
+    "var(--cream)",
+  ].join(", ");
+  const meter = "rgba(245, 239, 229, .06)";
+
+  assert.deepEqual(
+    assertCssBackgroundLayers(body, {
+      expected: [verticalGrid, horizontalGrid, "var(--cream)"],
+      label: "Body background",
+    }),
+    [
+      "linear-gradient(rgba(23, 50, 77, .04) 1px, transparent 1px)",
+      "linear-gradient(90deg, rgba(23, 50, 77, .04) 1px, transparent 1px)",
+      "var(--cream)",
+    ],
+  );
+  assert.throws(
+    () => assertCssBackgroundLayers(
+      `linear-gradient(#000, #000), ${body}`,
+      {
+        expected: [verticalGrid, horizontalGrid, "var(--cream)"],
+        label: "Body background",
+      },
+    ),
+    /exactly 3 top-level layers, found 4/i,
+  );
+  assert.throws(
+    () => assertCssBackgroundLayers(
+      body.replace("transparent 1px", "#000 1px"),
+      {
+        expected: [verticalGrid, horizontalGrid, "var(--cream)"],
+        label: "Body background",
+      },
+    ),
+    /layer 1 does not match its required structure/i,
+  );
+  assert.throws(
+    () => assertCssBackgroundLayers(
+      `linear-gradient(#fff, #fff), ${meter}`,
+      {
+        expected: [/^rgba\([^)]*\)$/i],
+        label: "Signal-meter background",
+      },
+    ),
+    /exactly 1 top-level layers, found 2/i,
   );
 });

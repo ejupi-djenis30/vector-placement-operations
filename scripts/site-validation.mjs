@@ -4,6 +4,227 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseHexColor(value) {
+  assert(
+    /^#[0-9a-f]{6}$/i.test(value),
+    `Expected a six-digit hexadecimal colour, received ${value}.`,
+  );
+  return value
+    .slice(1)
+    .match(/.{2}/g)
+    .map((channel) => Number.parseInt(channel, 16));
+}
+
+function channelLuminance(channel) {
+  const value = channel / 255;
+  return value <= 0.04045
+    ? value / 12.92
+    : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(color) {
+  const [red, green, blue] = parseHexColor(color).map(channelLuminance);
+  return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+}
+
+export function blendHexColors(foreground, background, opacity) {
+  assert(
+    Number.isFinite(opacity) && opacity >= 0 && opacity <= 1,
+    "Colour blending opacity must be between zero and one.",
+  );
+  const foregroundChannels = parseHexColor(foreground);
+  const backgroundChannels = parseHexColor(background);
+  const channels = foregroundChannels.map((channel, index) =>
+    Math.round((channel * opacity) + (backgroundChannels[index] * (1 - opacity)))
+  );
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function blendHexColorLayers(background, layers) {
+  return layers.reduce(
+    (surface, { color, opacity }) => blendHexColors(color, surface, opacity),
+    background,
+  );
+}
+
+export function combinedOpacity(opacities) {
+  assert(opacities.length > 0, "At least one opacity is required.");
+  return 1 - opacities.reduce((transparency, opacity) => {
+    assert(
+      Number.isFinite(opacity) && opacity >= 0 && opacity <= 1,
+      "Combined opacity values must be between zero and one.",
+    );
+    return transparency * (1 - opacity);
+  }, 1);
+}
+
+export function splitCssTopLevelLayers(value) {
+  assert(
+    typeof value === "string" && value.trim().length > 0,
+    "A non-empty CSS background value is required.",
+  );
+
+  const layers = [];
+  let depth = 0;
+  let escaped = false;
+  let quote = "";
+  let start = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+    if (character === ")") {
+      assert(depth > 0, `Unbalanced CSS background value: ${value}.`);
+      depth -= 1;
+      continue;
+    }
+    if (character !== "," || depth !== 0) continue;
+    layers.push(value.slice(start, index).trim());
+    start = index + 1;
+  }
+
+  assert(!quote && depth === 0, `Unbalanced CSS background value: ${value}.`);
+  layers.push(value.slice(start).trim());
+  assert(
+    layers.every((layer) => layer.length > 0),
+    `CSS background layers must not be empty: ${value}.`,
+  );
+  return layers;
+}
+
+export function assertCssBackgroundLayers(
+  value,
+  { expected, label = "CSS background" },
+) {
+  assert(
+    Array.isArray(expected) && expected.length > 0,
+    `${label} requires at least one expected layer.`,
+  );
+  const actual = splitCssTopLevelLayers(value);
+  assert(
+    actual.length === expected.length,
+    `${label} must use exactly ${expected.length} top-level layers, found ${actual.length}.`,
+  );
+  expected.forEach((expectation, index) => {
+    const layer = actual[index];
+    let matches = layer === expectation;
+    if (expectation instanceof RegExp) {
+      expectation.lastIndex = 0;
+      matches = expectation.test(layer);
+    }
+    assert(
+      matches,
+      `${label} layer ${index + 1} does not match its required structure: ${layer}.`,
+    );
+  });
+  return actual;
+}
+
+export function cssSelectorDeclaration(styles, selector, property) {
+  const cleanStyles = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+  const declarations = [];
+  const propertyPattern = new RegExp(
+    `(?:^|;)\\s*${escapeRegExp(property)}\\s*:\\s*([^;}]+)`,
+    "gi",
+  );
+
+  for (const match of cleanStyles.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = match[1].split(",").map((value) => value.trim());
+    if (!selectors.includes(selector)) continue;
+    for (const declaration of match[2].matchAll(propertyPattern)) {
+      declarations.push(declaration[1].trim().replace(/\s+/g, " "));
+    }
+  }
+
+  assert(
+    declarations.length === 1,
+    `Expected exactly one ${property} declaration for ${selector}, found ${declarations.length}.`,
+  );
+  return declarations[0];
+}
+
+export function assertCssSelectorDeclaration(
+  styles,
+  { expected, property, selector },
+) {
+  const actual = cssSelectorDeclaration(styles, selector, property);
+  assert(
+    actual === expected,
+    `${selector} must set ${property} to ${expected}, received ${actual}.`,
+  );
+  return actual;
+}
+
+export function parseCssRgbaLayers(value) {
+  const matches = [...value.matchAll(
+    /rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d*\.?\d+)\s*\)/gi,
+  )];
+  assert(matches.length > 0, `Expected at least one RGBA colour layer, received ${value}.`);
+  return matches.map((match) => {
+    const channels = match.slice(1, 4).map(Number);
+    const opacity = Number(match[4]);
+    assert(
+      channels.every((channel) =>
+        Number.isInteger(channel) && channel >= 0 && channel <= 255
+      )
+        && Number.isFinite(opacity)
+        && opacity >= 0
+        && opacity <= 1,
+      `Invalid RGBA colour layer in ${value}.`,
+    );
+    return {
+      color: `#${channels
+        .map((channel) => channel.toString(16).padStart(2, "0"))
+        .join("")}`,
+      opacity,
+    };
+  });
+}
+
+export function contrastRatio(foreground, background) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  return (
+    Math.max(foregroundLuminance, backgroundLuminance) + 0.05
+  ) / (
+    Math.min(foregroundLuminance, backgroundLuminance) + 0.05
+  );
+}
+
+export function assertContrastRatio(
+  foreground,
+  background,
+  { label = "Colour pair", minimum = 4.5 } = {},
+) {
+  const ratio = contrastRatio(foreground, background);
+  assert(
+    ratio >= minimum,
+    `${label} contrast ratio ${ratio.toFixed(2)}:1 is below ${minimum.toFixed(2)}:1.`,
+  );
+  return ratio;
+}
+
 function visitHtml(node, visitor) {
   visitor(node);
   for (const child of node.childNodes ?? []) visitHtml(child, visitor);
