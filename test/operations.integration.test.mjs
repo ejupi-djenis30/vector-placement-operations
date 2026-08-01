@@ -1132,9 +1132,10 @@ test("backup, manifest inspection and restore form a verified session-free round
 
   const truncatedDatabaseFile = path.join(root, "database-truncated.sqlite");
   copyFileSync(backup, truncatedDatabaseFile);
-  const truncatedBytes = readFileSync(backup).subarray(
+  const backupBytes = readFileSync(backup);
+  const truncatedBytes = backupBytes.subarray(
     0,
-    Math.floor(statSync(backup).size / 2),
+    Math.floor(backupBytes.length / 2),
   );
   writeFileSync(truncatedDatabaseFile, truncatedBytes);
   writeFileSync(

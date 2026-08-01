@@ -269,6 +269,9 @@ function openDirectoryGuard(directory) {
     return { descriptor: null, stats: pathStats };
   }
 
+  // O_NOFOLLOW binds this descriptor to the checked directory; the fstat and
+  // second lstat below must identify the same object before it is trusted.
+  // codeql[js/file-system-race]
   const descriptor = openSync(
     directory,
     constants.O_RDONLY

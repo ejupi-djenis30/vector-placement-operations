@@ -346,6 +346,10 @@ export async function buildApp(options = {}) {
         "The service is shutting down and is not accepting new work.",
       ));
   });
+  // This constant-time origin rejection intentionally precedes request
+  // accounting so forged cross-origin traffic cannot consume a school's API
+  // budget. Every request that survives it reaches the limiter below.
+  // codeql[js/missing-rate-limiting]
   app.use("/api", (request, _response, next) => {
     // Reject explicit browser cross-origin mutations before request accounting
     // and body inflation. The authenticated gate below repeats the check so an
@@ -386,6 +390,10 @@ export async function buildApp(options = {}) {
         ));
     },
   }));
+  // cookieParser only decodes the bearer cookie. The authenticated API gate
+  // below verifies both same-origin state and the session-bound CSRF token for
+  // every unsafe method before a route handler runs.
+  // codeql[js/missing-token-validation]
   app.use(cookieParser());
   app.use("/api", (_request, response, next) => {
     response.set("Cache-Control", "no-store");
