@@ -12,9 +12,9 @@ the supported product.
 
 | Release | Security support |
 | --- | --- |
-| Latest published `3.3.x` release | Supported |
-| Earlier `3.3.x` patches | Not supported |
-| `3.2.x` and earlier | Not supported |
+| Latest published `3.4.x` release | Supported |
+| Earlier `3.4.x` patches | Not supported |
+| `3.3.x` and earlier | Not supported |
 | Unreleased branches and commits | Not supported |
 
 Upgrade to the newest published release before reporting a problem that is already fixed there.

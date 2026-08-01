@@ -19,7 +19,7 @@ FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e
 ARG VECTOR_BUILD_REVISION=unknown
 
 LABEL org.opencontainers.image.source="https://github.com/ejupi-djenis30/vector-placement-operations" \
-      org.opencontainers.image.version="3.3.0" \
+      org.opencontainers.image.version="3.4.0" \
       org.opencontainers.image.revision="${VECTOR_BUILD_REVISION}" \
       org.opencontainers.image.licenses="MIT"
 

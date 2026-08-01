@@ -99,9 +99,9 @@ test("loads as an honest public presentation when the application API is unavail
   await expect(page.getByRole("heading", { name: "Keep each placement accountable." })).toBeVisible();
   await expect(page.locator(".signal-path li")).toHaveCount(3);
   await expect(page.getByRole("link", { name: /Start the installation/ })).toHaveAttribute("href", "#self-host");
-  await expect(page.getByRole("link", { name: /Download v3.3.0/ })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: /Download v3.4.0/ })).toHaveAttribute(
     "href",
-    "https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.3.0",
+    "https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.4.0",
   );
   await expect(page.locator("[data-api-status]")).toContainText("public product page");
   await expect(page.locator("[data-workspace-link]").first()).toHaveAttribute("href", "#self-host");
@@ -115,9 +115,9 @@ test("loads as an honest public presentation when the application API is unavail
     "href",
     "https://github.com/ejupi-djenis30/vector-placement-operations/blob/main/docs/self-hosting.md",
   );
-  await expect(page.getByRole("link", { name: /Get the v3.3.0 release/ })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: /Get the v3.4.0 release/ })).toHaveAttribute(
     "href",
-    "https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.3.0",
+    "https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.4.0",
   );
   expect(requests.some((path) => path.endsWith("/app.mjs"))).toBe(false);
   expect(requests.some((path) => path.endsWith("/api/health/live"))).toBe(false);
@@ -454,7 +454,7 @@ test.describe("no-JavaScript public presentation", () => {
       "@type": "SoftwareApplication",
       isAccessibleForFree: true,
       name: "VECTOR — Placement Operations",
-      softwareVersion: "3.3.0",
+      softwareVersion: "3.4.0",
     });
     expect(requests.some((path) => path.endsWith(".mjs"))).toBe(false);
     expect(requests.some((path) => path.startsWith("/api/") && !path.endsWith("branding.css")))
