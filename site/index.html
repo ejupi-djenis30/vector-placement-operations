@@ -4,7 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="VECTOR is a self-hosted placement operations workspace for schools." />
+    <meta name="application-name" content="VECTOR Placement Operations" />
+    <meta name="author" content="VECTOR contributors" />
     <meta name="theme-color" content="#17324d" />
+    <meta name="color-scheme" content="light" />
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <link rel="canonical" href="https://ejupi-djenis30.github.io/vector-placement-operations/" />
@@ -23,10 +26,13 @@
     <meta name="twitter:description" content="Assign placements, verify activity and close each record with evidence on infrastructure your school controls." />
     <meta name="twitter:image" content="https://ejupi-djenis30.github.io/vector-placement-operations/assets/social-preview.png" />
     <meta name="twitter:image:alt" content="VECTOR placement workflow with three completed readiness checks." />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; script-src 'sha256-orA99n2w77bl0Jt3ACVoP8RObmHzzMJ7O/ogqE8uFp8='; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; media-src 'none'; worker-src 'none'" />
     <link rel="icon" href="assets/vector-mark.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles/shared.css" />
+    <link rel="stylesheet" href="styles/marketing.css" />
     <link rel="stylesheet" href="api/public/branding.css" />
     <title>VECTOR — Placement Operations</title>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"VECTOR — Placement Operations","description":"A free, MIT-licensed, self-hosted placement operations workspace for schools.","applicationCategory":"BusinessApplication","operatingSystem":"Linux","softwareVersion":"3.3.0","url":"https://ejupi-djenis30.github.io/vector-placement-operations/","downloadUrl":"https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.3.0","codeRepository":"https://github.com/ejupi-djenis30/vector-placement-operations","license":"https://opensource.org/license/mit/","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}</script>
   </head>
   <body class="marketing-page">
     <a class="skip-link" href="#content">Skip to content</a>
@@ -36,9 +42,10 @@
         <span>VECTOR</span>
       </a>
       <nav aria-label="Primary navigation">
+        <a href="#product">Product</a>
         <a href="#workflow">Workflow</a>
-        <a href="#controls">Controls</a>
-        <a href="#self-host">Self-host</a>
+        <a href="#trust">Trust</a>
+        <a href="#self-host">Deploy</a>
       </nav>
       <a class="header-action" href="#self-host">Install VECTOR <span aria-hidden="true">↓</span></a>
     </header>
@@ -47,22 +54,27 @@
       <section class="marketing-hero section-wrap">
         <div class="hero-copy">
           <p class="eyebrow"><span>01</span> Self-hosted placement operations</p>
-          <h1>Keep each placement<br /><em>accountable.</em></h1>
+          <h1 id="hero-title">Keep each placement<br /> <em>accountable.</em></h1>
           <p class="lead">Plan cohort coverage, assign students and hosts, verify hours and check-ins, and close every placement with the evidence your process requires.</p>
           <div class="hero-actions">
             <a class="button button-primary" href="#self-host">Start the installation <span aria-hidden="true">↓</span></a>
             <a class="button button-quiet" href="https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.3.0">
               Download v3.3.0 <span aria-hidden="true">↗</span>
             </a>
-            <a class="workspace-entry" href="app/" data-workspace-link aria-describedby="installation-status">
-              <span data-workspace-label>Self-hosted sign-in</span> <span aria-hidden="true">↗</span>
+            <a class="workspace-entry" href="#self-host" data-workspace-link aria-describedby="installation-status" aria-label="Installation required; read the self-hosting setup path">
+              <span data-workspace-label>Installation required</span> <span aria-hidden="true">↓</span>
             </a>
           </div>
-          <p class="availability" id="installation-status" data-api-status aria-live="polite">
-            Checking whether this URL belongs to a running installation…
+          <p class="availability" id="installation-status" data-api-status>
+            You are viewing the public product page. Run VECTOR self-hosted to sign in and use the workspace.
           </p>
+          <ul class="hero-proof" aria-label="VECTOR product principles">
+            <li><span aria-hidden="true">✓</span> School-controlled runtime</li>
+            <li><span aria-hidden="true">✓</span> Explicit role boundaries</li>
+            <li><span aria-hidden="true">✓</span> Open source under MIT</li>
+          </ul>
         </div>
-        <div class="signal-board" aria-label="Illustration of the VECTOR placement flow">
+        <div class="signal-board" role="img" aria-label="Illustration of the VECTOR placement flow">
           <div class="signal-grid" aria-hidden="true"></div>
           <div class="signal-topline"><span>PLACEMENT / ACTIVE</span><b><i></i> VERIFIED SIGNALS</b></div>
           <ol class="signal-path">
@@ -79,9 +91,103 @@
         </div>
       </section>
 
+      <section class="proof-strip section-wrap" aria-label="VECTOR at a glance">
+        <div><strong>Self-hosted</strong><span>One school, one controlled installation</span></div>
+        <div><strong>Role-scoped</strong><span>Admin, coordinator, tutor and viewer access</span></div>
+        <div><strong>Traceable</strong><span>Append-only audit events for sensitive actions</span></div>
+        <div><strong>Portable</strong><span>Validated CSV and verified backup workflows</span></div>
+      </section>
+
+      <section class="product-tour section-wrap" id="product" aria-labelledby="product-title">
+        <div class="tour-heading">
+          <div>
+            <p class="eyebrow"><span>02</span> One operational workspace</p>
+            <h2 id="product-title">See the programme.<br /> <em>Act on the gap.</em></h2>
+          </div>
+          <p>
+            VECTOR turns coverage, placement progress, follow-ups and evidence into one shared
+            operating picture. The example below uses fictional records and mirrors the real
+            workspace structure.
+          </p>
+        </div>
+
+        <div class="workspace-preview" aria-hidden="true">
+          <div class="preview-window-bar">
+            <span></span><span></span><span></span>
+            <p>VECTOR / NORTHSTAR TECHNICAL COLLEGE</p>
+            <b>ONLINE</b>
+          </div>
+          <div class="preview-shell">
+            <aside class="preview-sidebar">
+              <div class="preview-brand"><img src="assets/vector-mark.svg" width="32" height="32" alt="" /><strong>VECTOR</strong></div>
+              <div class="preview-nav">
+                <span class="is-current">Overview</span>
+                <span>Attention</span>
+                <span>Coverage</span>
+                <span>Placements</span>
+                <span>Programmes</span>
+              </div>
+              <p><b>COHORT</b> 2026 / SOFTWARE SYSTEMS</p>
+            </aside>
+            <div class="preview-main">
+              <div class="preview-heading">
+                <div><span>THURSDAY · SCHOOL TIME</span><strong>Good morning, Maya.</strong></div>
+                <small>COORDINATOR</small>
+              </div>
+              <div class="preview-metrics">
+                <div><span>ACTIVE</span><strong>42</strong><small>placements</small></div>
+                <div><span>UNPLACED</span><strong>07</strong><small>students</small></div>
+                <div><span>TO REVIEW</span><strong>12</strong><small>evidence items</small></div>
+                <div class="is-accent"><span>READY</span><strong>86%</strong><small>programme coverage</small></div>
+              </div>
+              <div class="preview-columns">
+                <div class="preview-panel">
+                  <div class="preview-panel-title"><strong>Needs attention</strong><span>VIEW ALL →</span></div>
+                  <div class="attention-row"><i class="is-urgent"></i><span><strong>Placement ends in 3 days</strong><small>Amira Khan · Northstar Studio</small></span><b>HIGH</b></div>
+                  <div class="attention-row"><i></i><span><strong>Hours awaiting review</strong><small>4 entries · Software Systems</small></span><b>REVIEW</b></div>
+                  <div class="attention-row"><i></i><span><strong>Tutor assignment missing</strong><small>2 active placements</small></span><b>ASSIGN</b></div>
+                </div>
+                <div class="preview-panel">
+                  <div class="preview-panel-title"><strong>Coverage</strong><span>SPRING TERM</span></div>
+                  <div class="coverage-ring"><strong>35 / 42</strong><span>students placed</span></div>
+                  <div class="coverage-legend"><span><i></i> Placed 35</span><span><i></i> Open 7</span><span><i></i> Conflict 1</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="capability-grid">
+          <article>
+            <span>01</span>
+            <p class="card-kicker">Coverage planning</p>
+            <h3>Find every unplaced student before the period starts.</h3>
+            <p>Filter one cohort and period, expose overlaps, and open a prefilled placement directly from the gap.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <p class="card-kicker">Attention queue</p>
+            <h3>Start with the work that needs a decision.</h3>
+            <p>Overdue evidence, pending hours, approaching dates and missing assignments arrive in one role-scoped queue.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <p class="card-kicker">Programme rules</p>
+            <h3>Publish requirements without rewriting history.</h3>
+            <p>Version target hours, check-ins and evidence requirements; each placement keeps the rules it started with.</p>
+          </article>
+          <article>
+            <span>04</span>
+            <p class="card-kicker">Completion readiness</p>
+            <h3>Close only when the record is genuinely ready.</h3>
+            <p>Verified hours, follow-up and accepted evidence remain visible, deterministic and required before completion.</p>
+          </article>
+        </div>
+      </section>
+
       <section class="statement section-wrap" id="workflow" aria-labelledby="workflow-title">
-        <div class="section-label"><span>02</span> The operating view</div>
-        <h2 id="workflow-title">One workflow.<br />Each decision traceable.</h2>
+        <div class="section-label"><span>03</span> The operating flow</div>
+        <h2 id="workflow-title">One workflow.<br /> Each decision traceable.</h2>
         <div class="workflow-grid">
           <article><span>01</span><h3>Plan the coverage.</h3><p>See who still needs a placement by cohort and period, then record where the work happens and when.</p></article>
           <article><span>02</span><h3>Follow the work.</h3><p>Verify time, record check-ins and track each required evidence item against the placement it belongs to.</p></article>
@@ -91,8 +197,8 @@
 
       <section class="control-section section-wrap" id="controls" aria-labelledby="controls-title">
         <div class="control-copy">
-          <p class="eyebrow"><span>03</span> Built for real operating conditions</p>
-          <h2 id="controls-title">Straightforward to operate.<br /><em>Explicit where it matters.</em></h2>
+          <p class="eyebrow"><span>04</span> Built for real operating conditions</p>
+          <h2 id="controls-title">Straightforward to operate.<br /> <em>Explicit where it matters.</em></h2>
         </div>
         <dl class="control-list">
           <div><dt>Role-aware access</dt><dd>Administrators, coordinators, tutors and viewers see only the work their role permits.</dd></div>
@@ -102,15 +208,74 @@
         </dl>
       </section>
 
+      <section class="trust-section" id="trust" aria-labelledby="trust-title">
+        <div class="trust-grid section-wrap">
+          <div class="trust-copy">
+            <p class="eyebrow eyebrow-on-dark"><span>05</span> Keep the boundary explicit</p>
+            <h2 id="trust-title">Student records belong inside your institution’s control.</h2>
+            <p>
+              VECTOR runs as a private Node and SQLite service. It adds no hosted application
+              dependency, no analytics script and no third-party font or interface runtime.
+            </p>
+            <ul class="trust-list">
+              <li><span>01</span><div><strong>Server-side sessions</strong><p>Opaque cookies, origin checks, CSRF protection and inactivity expiry guard authenticated work.</p></div></li>
+              <li><span>02</span><div><strong>Scoped data access</strong><p>Every collection, export and cursor remains bound to the signed-in user’s school role and scope.</p></div></li>
+              <li><span>03</span><div><strong>Infrastructure-operated recovery</strong><p>Infrastructure operators use verified backup manifests; restore, diagnostics and compaction remain host-level commands outside application roles.</p></div></li>
+            </ul>
+            <a class="button button-on-dark" href="https://github.com/ejupi-djenis30/vector-placement-operations/blob/main/SECURITY.md">
+              Read the security model <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+          <div class="boundary-card" role="img" aria-label="VECTOR deployment boundary">
+            <p class="boundary-label">INSTITUTION-CONTROLLED INSTALLATION</p>
+            <div class="boundary-node boundary-browser"><span>01</span><div><strong>School browser</strong><small>Named user · role-scoped session</small></div></div>
+            <i aria-hidden="true"></i>
+            <div class="boundary-node boundary-vector"><img src="assets/vector-mark.svg" width="32" height="32" alt="" /><div><strong>VECTOR service</strong><small>Node · validation · audit</small></div></div>
+            <div class="boundary-branches" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="boundary-destinations">
+              <div><b>DB</b><strong>SQLite</strong><small>Operational record</small></div>
+              <div><b>LOG</b><strong>Audit</strong><small>Append-only events</small></div>
+              <div><b>ZIP</b><strong>Backup</strong><small>Verified manifest</small></div>
+            </div>
+            <p class="boundary-foot"><span aria-hidden="true"></span> No managed VECTOR cloud required</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="roles-section section-wrap" aria-labelledby="roles-title">
+        <div class="roles-heading">
+          <div>
+            <p class="eyebrow"><span>06</span> One system, deliberate permissions</p>
+            <h2 id="roles-title">Give each person the view their work requires.</h2>
+          </div>
+          <p>Permissions are enforced by the server, not hidden only in the interface.</p>
+        </div>
+        <div class="role-grid">
+          <article data-role="school_admin" data-scope="school"><span>ADMIN</span><h3>School administrator</h3><p>Owns users, branding, retention and governed corrections.</p></article>
+          <article data-role="coordinator" data-scope="school"><span>OPS</span><h3>Coordinator</h3><p>Plans coverage, manages programmes and closes operational records.</p></article>
+          <article data-role="tutor" data-scope="assigned"><span>TUTOR</span><h3>School tutor</h3><p>Works only with assigned placements, time, check-ins and evidence.</p></article>
+          <article data-role="viewer" data-scope="school"><span>VIEW</span><h3>Viewer</h3><p>Reads the school-wide placement picture in read-only mode.</p></article>
+        </div>
+        <div class="engineering-bar">
+          <div><span aria-hidden="true"></span><p><strong>Dependency-light by design</strong><small>Node 22 / 24 LTS · Express 5 · SQLite · Zod · plain browser modules</small></p></div>
+          <a href="https://github.com/ejupi-djenis30/vector-placement-operations/actions/workflows/ci.yml">View verification history <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+
       <section class="self-host section-wrap" id="self-host" aria-labelledby="self-host-title">
         <div>
-          <p class="eyebrow"><span>04</span> Own the runtime</p>
-          <h2 id="self-host-title">A public product page.<br />A private workspace.</h2>
+          <p class="eyebrow"><span>07</span> Own the runtime</p>
+          <h2 id="self-host-title">A public product page.<br /> A private workspace.</h2>
         </div>
         <div class="self-host-copy">
           <p>VECTOR is designed to be run by the institution that uses it. The browser workspace talks to your own Node and SQLite installation; GitHub Pages only publishes this product presentation.</p>
           <p>Before production use, your institution remains responsible for its legal basis, retention schedule, minimisation, DPIA and transport security.</p>
-          <div class="code-strip" aria-label="Self-hosting commands"><code>cp .env.example .env</code><code>docker compose run --rm --no-deps vector</code><code>remove bootstrap secret · docker compose up -d</code></div>
+          <ol class="deployment-steps">
+            <li><span>01</span><div><strong>Configure the boundary</strong><p>Set the public HTTPS origin, school identity, time zone and a unique one-shot bootstrap password.</p></div></li>
+            <li><span>02</span><div><strong>Initialize once</strong><p>Create the empty database and first administrator, then remove the bootstrap secret.</p></div></li>
+            <li><span>03</span><div><strong>Serve behind TLS</strong><p>Start the hardened container, confirm readiness and test backup restoration before loading real records.</p></div></li>
+          </ol>
+          <div class="code-strip" role="group" aria-label="Self-hosting commands"><code><span>$</span> cp .env.example .env</code><code><span>$</span> docker compose run --rm --no-deps vector</code><code><span>$</span> remove bootstrap secret · docker compose up -d</code></div>
           <div class="self-host-actions">
             <a class="text-link" href="https://github.com/ejupi-djenis30/vector-placement-operations/blob/main/docs/self-hosting.md">
               Read the complete installation guide <span aria-hidden="true">↗</span>
@@ -124,10 +289,17 @@
     </main>
 
     <footer class="site-footer section-wrap">
-      <img src="assets/vector-lockup.svg" alt="VECTOR — Placement Operations" width="210" height="48" />
-      <p>Self-hosted placement operations for schools.</p>
-      <a href="https://github.com/ejupi-djenis30/vector-placement-operations">Source repository <span aria-hidden="true">↗</span></a>
+      <div class="footer-brand">
+        <img src="assets/vector-lockup.svg" alt="VECTOR — Placement Operations" width="210" height="48" />
+        <p>Self-hosted placement operations for schools.</p>
+      </div>
+      <nav aria-label="Project links">
+        <a href="https://github.com/ejupi-djenis30/vector-placement-operations">Repository</a>
+        <a href="https://github.com/ejupi-djenis30/vector-placement-operations/releases/tag/v3.3.0">Release</a>
+        <a href="https://github.com/ejupi-djenis30/vector-placement-operations/blob/main/docs/self-hosting.md">Documentation</a>
+        <a href="https://github.com/ejupi-djenis30/vector-placement-operations/security/policy">Security</a>
+      </nav>
+      <p class="footer-meta">Open source under the <a href="https://github.com/ejupi-djenis30/vector-placement-operations/blob/main/LICENSE">MIT License</a>.</p>
     </footer>
-    <script type="module" src="app.mjs"></script>
   </body>
 </html>

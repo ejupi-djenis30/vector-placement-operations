@@ -9,12 +9,12 @@ import {
 } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { loadConfig } from "../server/config.mjs";
 import {
   assertMigrationState,
   databaseReady,
   latestMigrationVersion,
+  openExistingDatabase,
 } from "../server/db.mjs";
 import { parseArgs } from "./cli-args.mjs";
 
@@ -36,7 +36,16 @@ check("database_exists", () => {
   return config.databasePath;
 });
 
+let db;
+if (existsSync(config.databasePath)) {
+  check("database_open", () => {
+    db = openExistingDatabase(config.databasePath, { readonly: true });
+    return "ok";
+  });
+}
+
 check("storage_writable", () => {
+  if (!db) throw new Error("Database path did not pass the safe-open check.");
   const directory = path.dirname(path.resolve(config.databasePath));
   const probe = path.join(directory, `.vector-write-probe-${randomUUID()}`);
   let descriptor;
@@ -71,15 +80,6 @@ check("storage_permissions", () => {
   }
   return { directoryMode: "0700", databaseMode: "0600", uid: expectedUid };
 });
-
-let db;
-if (existsSync(config.databasePath)) {
-  check("database_open", () => {
-    db = new Database(config.databasePath, { timeout: 5_000, fileMustExist: true });
-    db.pragma("foreign_keys = ON");
-    return "ok";
-  });
-}
 
 if (db) {
   check("integrity", () => {

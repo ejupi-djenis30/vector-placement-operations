@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -30,6 +37,28 @@ const TAG_OBJECT = "b".repeat(40);
 const UNAPPROVED_TAGGER_EMAIL = ["info", "ejupilabs.com"].join("@");
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const releaseCli = fileURLToPath(new URL("../scripts/release-cli.mjs", import.meta.url));
+
+test("published 3.3.0 notes stay immutable while later work remains Unreleased", async () => {
+  const changelog = (await readFile(
+    new URL("../CHANGELOG.md", import.meta.url),
+    "utf8",
+  )).replaceAll("\r\n", "\n");
+  const published = changelog.match(
+    /^## 3\.3\.0[^\n]*\n\n[\s\S]*?(?=^## )/m,
+  );
+  assert.ok(published, "CHANGELOG.md must retain its 3.3.0 section.");
+  assert.equal(
+    sha256(`${published[0].trimEnd()}\n`),
+    "3c9b6c2973bf2e1824bb13208f375ed8e0903782b14cafa0a83b1be76c43bf57",
+  );
+  const unreleased = changelog.match(
+    /^## Unreleased\n\n([\s\S]*?)(?=^## )/m,
+  );
+  assert.ok(unreleased, "CHANGELOG.md must retain its Unreleased section.");
+  assert.doesNotMatch(unreleased[1], /No unreleased changes/);
+  assert.match(unreleased[1], /live WAL backup and restore/);
+  assert.match(unreleased[1], /checksummed Trivy binary/);
+});
 
 test("release inputs reject untracked environment, database, backup and oversized content", () => {
   const text = Buffer.from("safe release documentation\n");
@@ -371,10 +400,11 @@ test("two independently assembled self-hosted candidates are byte-for-byte ident
 });
 
 test(
-  "the extracted self-hosted artifact installs, tests and passes runtime diagnostics",
+  "the extracted self-hosted artifact pins its runtime and passes diagnostics",
   { skip: process.env.VECTOR_RELEASE_ACCEPTANCE_CHILD === "1" },
   async (context) => {
     const previousBootstrapPassword = process.env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD;
+    const previousPath = process.env.PATH;
     process.env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD = "ambient-release-secret-must-not-be-retained";
     context.after(() => {
       if (previousBootstrapPassword === undefined) {
@@ -382,9 +412,24 @@ test(
       } else {
         process.env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD = previousBootstrapPassword;
       }
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
     });
     const root = await mkdtemp(join(tmpdir(), "vector-release-acceptance-contract-"));
     context.after(() => rm(root, { recursive: true, force: true }));
+    const fakeBin = resolve(root, "unsupported-runtime-first");
+    await mkdir(fakeBin);
+    const fakeNode = resolve(fakeBin, process.platform === "win32" ? "node.cmd" : "node");
+    await writeFile(
+      fakeNode,
+      process.platform === "win32"
+        ? "@echo Unsupported PATH node must not run. 1>&2\r\n@exit /b 97\r\n"
+        : "#!/bin/sh\necho 'Unsupported PATH node must not run.' >&2\nexit 97\n",
+      { mode: 0o755 },
+    );
+    process.env.PATH = [fakeBin, previousPath]
+      .filter((value) => typeof value === "string" && value.length > 0)
+      .join(delimiter);
     const candidate = resolve(root, "candidate");
     await buildReleaseCandidate({
       output: candidate,

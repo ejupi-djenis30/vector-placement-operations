@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { get as httpGet } from "node:http";
+import { connect } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, test } from "node:test";
+import { gzipSync } from "node:zlib";
+import Database from "better-sqlite3";
 import {
+  createSession,
   deleteExpiredSessions,
+  MAX_ACTIVE_SESSIONS_PER_USER,
   readSession,
   touchSession,
 } from "../server/auth.mjs";
+import { createErrorHandler } from "../server/app.mjs";
 import { ADMIN_PASSWORD, startTestApp } from "../test-support/server-test-helper.mjs";
 
 const running = new Set();
@@ -21,10 +30,98 @@ async function app(options) {
   return instance;
 }
 
+function compressedAsset(baseUrl, pathname, encoding) {
+  const url = new URL(pathname, baseUrl);
+  return new Promise((resolve, reject) => {
+    const request = httpGet({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      headers: { "Accept-Encoding": encoding },
+    }, (response) => {
+      let bytes = 0;
+      response.on("data", (chunk) => {
+        bytes += chunk.length;
+      });
+      response.on("end", () => resolve({
+        bytes,
+        contentType: response.headers["content-type"],
+        encoding: response.headers["content-encoding"],
+        status: response.statusCode,
+      }));
+    });
+    request.on("error", reject);
+  });
+}
+
+function conditionalAsset(baseUrl, pathname, etag) {
+  const url = new URL(pathname, baseUrl);
+  return new Promise((resolve, reject) => {
+    const request = httpGet({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      headers: {
+        "Accept-Encoding": "identity",
+        "If-None-Match": etag,
+      },
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode));
+    });
+    request.once("error", reject);
+  });
+}
+
+function rawHttp(baseUrl, headerLines, body = "") {
+  const url = new URL(baseUrl);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(url.port), url.hostname);
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.once("error", reject);
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+    socket.once("end", () => resolve(response));
+    socket.once("connect", () => {
+      socket.end(`${headerLines.join("\r\n")}\r\n\r\n${body}`);
+    });
+  });
+}
+
+function disconnectMidBody(baseUrl, headerLines, partialBody) {
+  const url = new URL(baseUrl);
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(url.port), url.hostname);
+    let settled = false;
+    const finish = (error = null) => {
+      if (settled) return;
+      settled = true;
+      if (error && error.code !== "ECONNRESET") reject(error);
+      else resolve();
+    };
+    socket.once("error", finish);
+    socket.once("close", () => finish());
+    socket.once("connect", () => {
+      socket.write(`${headerLines.join("\r\n")}\r\n\r\n${partialBody}`);
+      setImmediate(() => socket.destroy());
+    });
+  });
+}
+
 async function createUser(client, input) {
   const result = await client.request("/api/users", { method: "POST", body: input });
   assert.equal(result.response.status, 201);
   return result.payload.id;
+}
+
+function assertApiSessionCookie(header, { cleared = false } = {}) {
+  assert.ok(header);
+  assert.match(header, /(?:^|;\s*)Path=\/api(?:;|$)/);
+  assert.doesNotMatch(header, /(?:^|;\s*)Path=\/(?:;|$)/);
+  if (cleared) assert.match(header, /^vector_session=;/);
+  else assert.doesNotMatch(header, /^vector_session=;/);
 }
 
 async function replaceTemporaryPassword(client, email, currentPassword, newPassword) {
@@ -41,26 +138,808 @@ async function replaceTemporaryPassword(client, email, currentPassword, newPassw
   assert.equal(replacement.payload.user.mustChangePassword, false);
 }
 
-test("login rejects a cross-origin request and accepts the configured origin", async () => {
+test("API throttling, static compression and browser capability boundaries stay scoped", async () => {
   const instance = await app();
   const health = await instance.client.request("/api/health/live");
   assert.equal(health.response.status, 200);
-  assert.ok(health.response.headers.get("ratelimit-policy"));
+  assert.equal(health.response.headers.get("ratelimit-policy"), null);
+  assert.equal(
+    health.response.headers.get("permissions-policy"),
+    "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=()",
+  );
+  const healthWithBody = await rawHttp(instance.baseUrl, [
+    "GET /api/health/live HTTP/1.1",
+    "Host: 127.0.0.1",
+    "Accept: application/json",
+    "Content-Type: application/json",
+    "Content-Length: 2",
+    "Connection: close",
+  ], "{}");
+  assert.match(healthWithBody, /^HTTP\/1\.1 200 OK/);
+  assert.match(healthWithBody, /RateLimit-Policy:/i);
   const workspace = await fetch(`${instance.baseUrl}/app/`, { redirect: "manual" });
   assert.equal(workspace.status, 200);
-  assert.ok(workspace.headers.get("ratelimit-policy"));
-  const crossOrigin = await instance.client.request("/api/auth/login", {
-    method: "POST",
-    body: {
-      email: "admin@example.test",
-      password: ADMIN_PASSWORD,
-    },
-    includeCsrf: false,
-    headers: { origin: "https://attacker.example" },
+  assert.equal(workspace.headers.get("ratelimit-policy"), null);
+  assert.doesNotMatch(
+    workspace.headers.get("content-security-policy") ?? "",
+    /upgrade-insecure-requests/i,
+  );
+  const workspaceAsset = await fetch(`${instance.baseUrl}/app/workspace.mjs`, {
+    headers: { "accept-encoding": "gzip" },
   });
-  assert.equal(crossOrigin.response.status, 403);
-  assert.equal(crossOrigin.payload.error.code, "invalid_origin");
+  assert.equal(workspaceAsset.status, 200);
+  assert.equal(workspaceAsset.headers.get("content-encoding"), "gzip");
+  assert.equal(workspaceAsset.headers.get("cache-control"), "no-cache");
+  assert.match(workspaceAsset.headers.get("vary") ?? "", /Accept-Encoding/i);
+  assert.equal(workspaceAsset.headers.get("ratelimit-policy"), null);
+  assert.equal(
+    workspaceAsset.headers.get("permissions-policy"),
+    "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=()",
+  );
+  const brotliAsset = await compressedAsset(
+    instance.baseUrl,
+    "/app/workspace.mjs",
+    "br",
+  );
+  assert.equal(brotliAsset.status, 200);
+  assert.equal(brotliAsset.encoding, "br");
+  assert.ok(
+    brotliAsset.bytes < 35_000,
+    `The compressed workspace exceeded its 35 KB transfer budget: ${brotliAsset.bytes} bytes.`,
+  );
+  let workspaceModuleBytes = brotliAsset.bytes;
+  for (const pathname of [
+    "/app/workspace-domain.mjs",
+    "/app/workspace-programmes.mjs",
+    "/app/workspace-ui.mjs",
+  ]) {
+    const moduleAsset = await compressedAsset(instance.baseUrl, pathname, "br");
+    assert.equal(moduleAsset.status, 200, pathname);
+    assert.equal(moduleAsset.encoding, "br", pathname);
+    assert.match(moduleAsset.contentType, /javascript/, pathname);
+    workspaceModuleBytes += moduleAsset.bytes;
+  }
+  assert.ok(
+    workspaceModuleBytes < 35_000,
+    `The compressed workspace module graph exceeded its 35 KB transfer budget: ${workspaceModuleBytes} bytes.`,
+  );
+
+  const cssAssets = new Map();
+  for (const pathname of [
+    "/styles/shared.css",
+    "/styles/marketing.css",
+    "/styles/workspace.css",
+  ]) {
+    const asset = await compressedAsset(instance.baseUrl, pathname, "br");
+    assert.equal(asset.status, 200, pathname);
+    assert.equal(asset.encoding, "br", pathname);
+    assert.match(asset.contentType, /^text\/css\b/i, pathname);
+    cssAssets.set(pathname, asset.bytes);
+  }
+  assert.ok(
+    cssAssets.get("/styles/shared.css") < 1_500,
+    `Shared CSS exceeded its 1.5 KB Brotli budget: ${cssAssets.get("/styles/shared.css")} bytes.`,
+  );
+  assert.ok(
+    cssAssets.get("/styles/shared.css") + cssAssets.get("/styles/marketing.css") < 7_000,
+    "The public presentation CSS graph exceeded its 7 KB Brotli budget.",
+  );
+  assert.ok(
+    cssAssets.get("/styles/shared.css") + cssAssets.get("/styles/workspace.css") < 7_000,
+    "The authenticated workspace CSS graph exceeded its 7 KB Brotli budget.",
+  );
+  const legacyStylesheet = await fetch(`${instance.baseUrl}/styles.css`, {
+    headers: { Accept: "text/css" },
+    redirect: "manual",
+  });
+  assert.equal(legacyStylesheet.status, 404);
+
+  const etag = workspaceAsset.headers.get("etag");
+  assert.ok(etag);
+  assert.equal(
+    await conditionalAsset(instance.baseUrl, "/app/workspace.mjs", etag),
+    304,
+  );
+
+  const tinyAsset = await fetch(`${instance.baseUrl}/robots.txt`, {
+    headers: { "accept-encoding": "gzip" },
+  });
+  assert.equal(tinyAsset.status, 200);
+  assert.equal(tinyAsset.headers.get("content-encoding"), null);
+  assert.equal(tinyAsset.headers.get("cache-control"), "no-cache");
+  assert.match(tinyAsset.headers.get("content-type") ?? "", /^text\/plain\b/i);
+  assert.equal(await tinyAsset.text(), "User-agent: *\nDisallow: /\n");
+
+  const unsupportedCompression = await fetch(`${instance.baseUrl}/app/workspace.mjs`, {
+    headers: { "accept-encoding": "compress" },
+  });
+  assert.equal(unsupportedCompression.status, 200);
+  assert.equal(unsupportedCompression.headers.get("content-encoding"), null);
+
+  for (const pathname of [
+    "/app/%2e%2e%2fserver%2fapp.mjs",
+    "/app/%2e%2e%5cserver%5capp.mjs",
+    "/assets/%2e%2e%2fpackage.json",
+  ]) {
+    const traversal = await fetch(`${instance.baseUrl}${pathname}`, {
+      headers: { accept: "application/json" },
+      redirect: "manual",
+    });
+    assert.equal(traversal.status, 404);
+    assert.equal((await traversal.text()).includes("bootstrapDatabase"), false);
+  }
+});
+
+test("draining keeps liveness observable while readiness and new work fail closed", async () => {
+  const instance = await app();
+  assert.equal(instance.app.locals.vector.isDraining(), false);
+  instance.app.locals.vector.beginDrain();
+  instance.app.locals.vector.beginDrain();
+  assert.equal(instance.app.locals.vector.isDraining(), true);
+
+  const live = await instance.client.request("/api/health/live");
+  assert.equal(live.response.status, 200);
+  assert.equal(live.payload.status, "ok");
+  assert.equal(live.response.headers.get("connection"), "close");
+
+  for (const path of ["/api/health/ready", "/api/public/branding", "/app/"]) {
+    const response = await fetch(`${instance.baseUrl}${path}`, {
+      headers: { accept: "application/json" },
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 503, path);
+    assert.equal(response.ok, false, path);
+    assert.equal(response.headers.get("cache-control"), "no-store", path);
+    assert.equal(response.headers.get("connection"), "close", path);
+    assert.equal(response.headers.get("retry-after"), "1", path);
+    assert.equal(payload.error.code, "service_draining", path);
+    assert.equal(payload.error.requestId, response.headers.get("x-request-id"), path);
+  }
+  assert.equal(instance.db.open, true);
+});
+
+test("public HEAD mirrors GET while private HEAD stays authenticated and side-effect-free", async () => {
+  const instance = await app();
+  for (const [pathname, status, contentType] of [
+    ["/api/health/live", 200, "application/json"],
+    ["/api/health/ready", 200, "application/json"],
+    ["/api/public/branding", 200, "application/json"],
+    ["/api/public/branding.css", 200, "text/css"],
+    ["/api/public/branding/logo", 404, "application/json"],
+    ["/api/session", 200, "application/json"],
+  ]) {
+    const response = await fetch(`${instance.baseUrl}${pathname}`, { method: "HEAD" });
+    assert.equal(response.status, status, pathname);
+    assert.match(response.headers.get("content-type") ?? "", new RegExp(contentType));
+    assert.equal((await response.arrayBuffer()).byteLength, 0);
+  }
+
+  const anonymous = await fetch(`${instance.baseUrl}/api/dashboard`, { method: "HEAD" });
+  assert.equal(anonymous.status, 401);
+  assert.equal((await anonymous.arrayBuffer()).byteLength, 0);
+
   assert.equal((await instance.client.login()).response.status, 200);
+  const before = instance.db.prepare(
+    "SELECT last_seen_at AS lastSeenAt FROM sessions LIMIT 1",
+  ).get();
+  const authenticated = await fetch(`${instance.baseUrl}/api/dashboard`, {
+    method: "HEAD",
+    headers: { cookie: instance.client.cookie },
+  });
+  assert.equal(authenticated.status, 200);
+  assert.equal((await authenticated.arrayBuffer()).byteLength, 0);
+  const after = instance.db.prepare(
+    "SELECT last_seen_at AS lastSeenAt FROM sessions LIMIT 1",
+  ).get();
+  assert.deepEqual(after, before);
+});
+
+test("header, body and partial-response failures stay bounded and use stable errors", async () => {
+  const instance = await app();
+  const requestHeaders = (count) => [
+    "GET /api/health/live HTTP/1.1",
+    "Host: 127.0.0.1",
+    "Accept: application/json",
+    ...Array.from(
+      { length: count - 3 },
+      (_value, index) => `X-Probe-${index}: ${index}`,
+    ),
+    "Connection: close",
+  ];
+  const boundary = await rawHttp(instance.baseUrl, requestHeaders(100));
+  assert.match(boundary, /^HTTP\/1\.1 200 OK/);
+
+  const excessive = await rawHttp(instance.baseUrl, requestHeaders(101));
+  assert.match(excessive, /^HTTP\/1\.1 431 /);
+  assert.match(excessive, /"code":"too_many_headers"/);
+  assert.match(excessive, /Cache-Control: no-store/i);
+
+  const oversizedHeaderBlock = await rawHttp(instance.baseUrl, [
+    "GET /api/health/live HTTP/1.1",
+    "Host: 127.0.0.1",
+    `X-Oversized: ${"x".repeat(17_000)}`,
+    "Connection: close",
+  ]);
+  assert.match(oversizedHeaderBlock, /^HTTP\/1\.1 431 /);
+
+  const duplicateHeaderRequests = [
+    {
+      name: "host",
+      headers: [
+        "GET /api/health/live HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Host: attacker.example",
+        "Connection: close",
+      ],
+      body: "",
+    },
+    {
+      name: "origin",
+      headers: [
+        "POST /api/auth/login HTTP/1.1",
+        "Host: 127.0.0.1",
+        `Origin: ${instance.config.origin}`,
+        "Origin: https://attacker.example",
+        "Content-Type: application/json",
+        "Content-Length: 2",
+        "Connection: close",
+      ],
+      body: "{}",
+    },
+    {
+      name: "content type",
+      headers: [
+        "POST /api/auth/login HTTP/1.1",
+        "Host: 127.0.0.1",
+        `Origin: ${instance.config.origin}`,
+        "Content-Type: application/json",
+        "Content-Type: text/plain",
+        "Content-Length: 2",
+        "Connection: close",
+      ],
+      body: "{}",
+    },
+    {
+      name: "content encoding",
+      headers: [
+        "POST /api/auth/login HTTP/1.1",
+        "Host: 127.0.0.1",
+        `Origin: ${instance.config.origin}`,
+        "Content-Type: application/json",
+        "Content-Encoding: identity",
+        "Content-Encoding: gzip",
+        "Content-Length: 2",
+        "Connection: close",
+      ],
+      body: "{}",
+    },
+    {
+      name: "session cookie within one header field",
+      headers: [
+        "GET /api/session HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Cookie: vector_session=first; vector_session=second",
+        "Connection: close",
+      ],
+      body: "",
+    },
+  ];
+  for (const probe of duplicateHeaderRequests) {
+    const response = await rawHttp(instance.baseUrl, probe.headers, probe.body);
+    assert.match(response, /^HTTP\/1\.1 400 /, probe.name);
+    assert.match(response, /"code":"ambiguous_request_headers"/, probe.name);
+  }
+
+  for (const probe of [
+    {
+      name: "content-length plus transfer-encoding",
+      headers: [
+        "POST /api/auth/login HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Content-Type: application/json",
+        "Content-Length: 2",
+        "Transfer-Encoding: chunked",
+        "Connection: close",
+      ],
+      body: "0\r\n\r\n",
+    },
+    {
+      name: "duplicate content-length",
+      headers: [
+        "POST /api/auth/login HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Content-Type: application/json",
+        "Content-Length: 2",
+        "Content-Length: 2",
+        "Connection: close",
+      ],
+      body: "{}",
+    },
+  ]) {
+    const response = await rawHttp(instance.baseUrl, probe.headers, probe.body);
+    assert.match(response, /^HTTP\/1\.1 400 /, probe.name);
+  }
+
+  const compressedBomb = gzipSync(JSON.stringify({
+    value: "x".repeat(instance.config.bodyLimit + 1),
+  }));
+  assert.ok(compressedBomb.length < instance.config.bodyLimit);
+  const bombResponse = await fetch(`${instance.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      origin: instance.config.origin,
+      "content-type": "application/json",
+      "content-encoding": "gzip",
+    },
+    body: compressedBomb,
+  });
+  assert.equal(bombResponse.status, 413);
+  assert.equal((await bombResponse.json()).error.code, "payload_too_large");
+
+  const truncatedGzip = gzipSync(JSON.stringify({ value: "complete" }));
+  const truncatedResponse = await fetch(`${instance.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      origin: instance.config.origin,
+      "content-type": "application/json",
+      "content-encoding": "gzip",
+    },
+    body: truncatedGzip.subarray(0, Math.floor(truncatedGzip.length / 2)),
+  });
+  assert.equal(truncatedResponse.status, 400);
+  assert.equal(
+    (await truncatedResponse.json()).error.code,
+    "invalid_content_encoding",
+  );
+
+  assert.equal((await instance.client.login()).response.status, 200);
+  const malformedPath = await rawHttp(instance.baseUrl, [
+    "GET /api/placements/% HTTP/1.1",
+    "Host: 127.0.0.1",
+    "Accept: application/json",
+    `Cookie: ${instance.client.cookie}`,
+    "Connection: close",
+  ]);
+  assert.match(malformedPath, /^HTTP\/1\.1 400 /);
+  assert.match(malformedPath, /"code":"request_rejected"/);
+
+  const beforeAbortedLogin = instance.db.prepare(
+    "SELECT COUNT(*) FROM audit_events WHERE action = 'auth.login_failed'",
+  ).pluck().get();
+  await disconnectMidBody(instance.baseUrl, [
+    "POST /api/auth/login HTTP/1.1",
+    "Host: 127.0.0.1",
+    `Origin: ${instance.config.origin}`,
+    "Content-Type: application/json",
+    "Content-Length: 4096",
+    "Connection: close",
+  ], '{"email":"partial@example.test",');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    instance.db.prepare(
+      "SELECT COUNT(*) FROM audit_events WHERE action = 'auth.login_failed'",
+    ).pluck().get(),
+    beforeAbortedLogin,
+  );
+  assert.equal(
+    (await instance.client.request("/api/health/ready")).response.status,
+    200,
+  );
+
+  const malformedBodies = [
+    {
+      name: "invalid JSON",
+      headers: { "content-type": "application/json" },
+      body: "{",
+      status: 400,
+      code: "invalid_json",
+    },
+    {
+      name: "invalid gzip",
+      headers: {
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+      },
+      body: "not-gzip",
+      status: 400,
+      code: "invalid_content_encoding",
+    },
+    {
+      name: "unsupported content encoding",
+      headers: {
+        "content-type": "application/json",
+        "content-encoding": "compress",
+      },
+      body: "{}",
+      status: 415,
+      code: "unsupported_content_encoding",
+    },
+    {
+      name: "unsupported charset",
+      headers: { "content-type": "application/json; charset=x-unknown" },
+      body: "{}",
+      status: 415,
+      code: "unsupported_charset",
+    },
+    {
+      name: "oversized JSON",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ value: "x".repeat(instance.config.bodyLimit) }),
+      status: 413,
+      code: "payload_too_large",
+    },
+  ];
+  for (const probe of malformedBodies) {
+    const response = await fetch(`${instance.baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        origin: instance.config.origin,
+        ...probe.headers,
+      },
+      body: probe.body,
+    });
+    const payload = await response.json();
+    assert.equal(response.status, probe.status, probe.name);
+    assert.equal(payload.error.code, probe.code, probe.name);
+    assert.equal(
+      response.headers.get("x-request-id"),
+      payload.error.requestId,
+      probe.name,
+    );
+    assert.equal(response.headers.get("cache-control"), "no-store", probe.name);
+    assert.equal("stack" in payload.error, false, probe.name);
+  }
+
+  const forwarded = [];
+  const handler = createErrorHandler({ logLevel: "silent", production: true });
+  handler(
+    new Error("stream failed"),
+    { id: "request-id", method: "GET", path: "/download" },
+    {
+      headersSent: true,
+      status() {
+        throw new Error("must not write a second response");
+      },
+    },
+    (error) => forwarded.push(error),
+  );
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0].message, "stream failed");
+});
+
+test("non-API routes never enter the metered JSON parser", async () => {
+  const instance = await app();
+  const response = await fetch(`${instance.baseUrl}/not-an-api-route`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: "{",
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 404);
+  assert.equal(payload.error.code, "not_found");
+  assert.equal(response.headers.get("ratelimit-policy"), null);
+  assert.equal(response.headers.get("x-request-id"), payload.error.requestId);
+});
+
+test("readiness fails closed when migration identity or schema no longer matches the build", async () => {
+  const instance = await app();
+  const ready = await instance.client.request("/api/health/ready");
+  assert.equal(ready.response.status, 200);
+  const migration = instance.db.prepare(`
+    SELECT version, checksum
+    FROM schema_migrations
+    ORDER BY version DESC
+    LIMIT 1
+  `).get();
+  instance.db.prepare(
+    "UPDATE schema_migrations SET checksum = ? WHERE version = ?",
+  ).run("0".repeat(64), migration.version);
+  const unavailable = await instance.client.request("/api/health/ready");
+  assert.equal(unavailable.response.status, 503);
+  assert.equal(unavailable.payload.error.code, "not_ready");
+  assert.equal(
+    unavailable.response.headers.get("x-request-id"),
+    unavailable.payload.error.requestId,
+  );
+  instance.db.prepare(
+    "UPDATE schema_migrations SET checksum = ? WHERE version = ?",
+  ).run(migration.checksum, migration.version);
+  assert.equal(
+    (await instance.client.request("/api/health/ready")).response.status,
+    200,
+  );
+  instance.db.exec("DROP TRIGGER sessions_user_capacity");
+  const drifted = await instance.client.request("/api/health/ready");
+  assert.equal(drifted.response.status, 503);
+  assert.equal(drifted.payload.error.code, "not_ready");
+});
+
+test("bounded SQLite write contention returns a retryable service response", async () => {
+  const root = await mkdtemp(join(tmpdir(), "vector-api-busy-"));
+  let instance = null;
+  let blocker = null;
+  try {
+    const databasePath = join(root, "vector.sqlite");
+    instance = await app({ databasePath });
+    assert.equal((await instance.client.login()).response.status, 200);
+    instance.db.pragma("busy_timeout = 75");
+    blocker = new Database(databasePath, { fileMustExist: true });
+    blocker.exec("BEGIN IMMEDIATE");
+
+    const startedAt = Date.now();
+    const result = await instance.client.request("/api/auth/logout", {
+      method: "POST",
+      body: {},
+    });
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(result.response.status, 503);
+    assert.equal(result.payload.error.code, "database_busy");
+    assert.equal(result.payload.error.message, "The database is busy. Try again shortly.");
+    assert.equal(result.response.headers.get("retry-after"), "1");
+    assert.equal("details" in result.payload.error, false);
+    assert.ok(elapsedMs >= 50, `SQLite returned before its busy wait: ${elapsedMs} ms.`);
+    assert.ok(elapsedMs < 1_000, `SQLite exceeded the bounded API wait: ${elapsedMs} ms.`);
+  } finally {
+    if (blocker?.inTransaction) blocker.exec("ROLLBACK");
+    blocker?.close();
+    if (instance) {
+      running.delete(instance);
+      await instance.close();
+    }
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("unknown non-application 4xx errors fail closed without exposing library diagnostics", () => {
+  const state = { headers: {} };
+  const response = {
+    headersSent: false,
+    set(name, value) {
+      state.headers[name] = value;
+      return this;
+    },
+    status(value) {
+      state.status = value;
+      return this;
+    },
+    json(value) {
+      state.payload = value;
+      return this;
+    },
+  };
+  const handler = createErrorHandler({ logLevel: "silent", production: true });
+  const error = Object.assign(
+    new Error("future-library-private-diagnostic"),
+    {
+      status: 422,
+      code: "future_library_failure",
+      details: { record: "SensitiveRecordIdentifier" },
+    },
+  );
+  handler(
+    error,
+    {
+      id: "request-library-4xx",
+      method: "GET",
+      path: "/api/placements/SensitiveRecordIdentifier",
+      route: { path: "/api/placements/:id" },
+    },
+    response,
+    () => assert.fail("The normalized response must not be delegated."),
+  );
+  assert.equal(state.status, 422);
+  assert.equal(state.headers["Cache-Control"], "no-store");
+  assert.deepEqual(state.payload, {
+    error: {
+      code: "request_rejected",
+      message: "The request could not be accepted.",
+      requestId: "request-library-4xx",
+    },
+  });
+  assert.equal(JSON.stringify(state.payload).includes("future-library"), false);
+  assert.equal(JSON.stringify(state.payload).includes("SensitiveRecordIdentifier"), false);
+});
+
+test("rate-limit identity ignores spoofed forwarding headers unless a proxy hop is trusted", async () => {
+  const direct = await app();
+  const validationLogs = [];
+  const originalConsoleError = console.error;
+  console.error = (...values) => validationLogs.push(values.join(" "));
+  try {
+    const statuses = [];
+    for (let index = 1; index <= 9; index += 1) {
+      const result = await direct.client.request("/api/auth/login", {
+        method: "POST",
+        body: {
+          email: "nobody@example.test",
+          password: "incorrect-password",
+        },
+        includeCsrf: false,
+        headers: { "x-forwarded-for": `203.0.113.${index}` },
+      });
+      statuses.push(result.response.status);
+    }
+    assert.deepEqual(statuses, [401, 401, 401, 401, 401, 401, 401, 401, 429]);
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(
+    validationLogs.some((entry) => entry.includes("ERR_ERL_UNEXPECTED_X_FORWARDED_FOR")),
+    false,
+  );
+
+  const proxied = await app({ env: { VECTOR_TRUST_PROXY: "1" } });
+  const duplicateForwarded = await rawHttp(proxied.baseUrl, [
+    "GET /api/health/live HTTP/1.1",
+    "Host: 127.0.0.1",
+    "X-Forwarded-For: 198.51.100.10",
+    "X-Forwarded-For: 203.0.113.10",
+    "Connection: close",
+  ]);
+  assert.match(duplicateForwarded, /^HTTP\/1\.1 400 /);
+  assert.match(duplicateForwarded, /"code":"ambiguous_request_headers"/);
+  const proxiedStatuses = [];
+  for (let index = 1; index <= 9; index += 1) {
+    const result = await proxied.client.request("/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "nobody@example.test",
+        password: "incorrect-password",
+      },
+      includeCsrf: false,
+      headers: { "x-forwarded-for": `198.51.100.${index}` },
+    });
+    proxiedStatuses.push(result.response.status);
+  }
+  assert.deepEqual(proxiedStatuses, [401, 401, 401, 401, 401, 401, 401, 401, 401]);
+});
+
+test("explicit cross-origin mutations are rejected before API budgets and body parsing", async () => {
+  const instance = await app();
+  const malformed = await fetch(`${instance.baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      origin: "https://attacker.example",
+      "content-type": "application/json",
+      "content-encoding": "gzip",
+    },
+    body: "not-a-gzip-stream",
+  });
+  assert.equal(malformed.status, 403);
+  assert.equal((await malformed.json()).error.code, "invalid_origin");
+  assert.equal(malformed.headers.get("ratelimit-policy"), null);
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const crossOrigin = await instance.client.request("/api/auth/login", {
+      method: "POST",
+      body: {
+        email: "admin@example.test",
+        password: ADMIN_PASSWORD,
+      },
+      includeCsrf: false,
+      headers: { origin: "https://attacker.example" },
+    });
+    assert.equal(crossOrigin.response.status, 403);
+    assert.equal(crossOrigin.payload.error.code, "invalid_origin");
+    assert.equal(crossOrigin.response.headers.get("ratelimit-policy"), null);
+  }
+  assert.equal((await instance.client.login()).response.status, 200);
+
+  const missingOrigin = await fetch(`${instance.baseUrl}/api/hosts`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      cookie: instance.client.cookie,
+      "content-type": "application/json",
+      "x-csrf-token": instance.client.csrfToken,
+    },
+    body: JSON.stringify({ name: "Origin must still be present" }),
+  });
+  assert.equal(missingOrigin.status, 403);
+  assert.equal((await missingOrigin.json()).error.code, "invalid_origin");
+  assert.ok(missingOrigin.headers.get("ratelimit-policy"));
+});
+
+test("failed login auditing is identity-blind for known, unknown and inactive accounts", async () => {
+  const instance = await app();
+  const { client, db } = instance;
+  assert.equal((await client.login()).response.status, 200);
+  const inactiveId = await createUser(client, {
+    email: "inactive.login@example.test",
+    displayName: "Inactive login",
+    password: "inactive-login-password-2026",
+    role: "viewer",
+    dataScope: "school",
+  });
+  db.prepare("UPDATE users SET active = 0 WHERE id = ?").run(inactiveId);
+  const schoolId = db.prepare("SELECT id FROM schools ORDER BY created_at, id LIMIT 1").pluck().get();
+
+  const attempts = [
+    ["admin@example.test", "incorrect-known-password"],
+    ["unknown.login@example.test", "incorrect-unknown-password"],
+    ["inactive.login@example.test", "inactive-login-password-2026"],
+  ];
+  const auditShapes = [];
+  for (const [email, password] of attempts) {
+    const before = db.prepare(
+      "SELECT COUNT(*) FROM audit_events WHERE action = 'auth.login_failed'",
+    ).pluck().get();
+    const result = await instance.newClient().login(email, password);
+    assert.equal(result.response.status, 401);
+    assert.equal(result.payload.error.code, "invalid_credentials");
+    assert.equal(result.payload.error.message, "Email or password is incorrect.");
+    assert.match(result.response.headers.get("ratelimit-policy"), /w=60/);
+    const after = db.prepare(
+      "SELECT COUNT(*) FROM audit_events WHERE action = 'auth.login_failed'",
+    ).pluck().get();
+    assert.equal(after, before + 1);
+    auditShapes.push(db.prepare(`
+      SELECT
+        school_id AS schoolId,
+        actor_user_id AS actorUserId,
+        entity_type AS entityType,
+        entity_id AS entityId,
+        metadata_json AS metadata
+      FROM audit_events
+      WHERE action = 'auth.login_failed'
+      ORDER BY rowid DESC
+      LIMIT 1
+    `).get());
+  }
+
+  assert.deepEqual(auditShapes, Array.from({ length: attempts.length }, () => ({
+    schoolId,
+    actorUserId: null,
+    entityType: "user",
+    entityId: null,
+    metadata: '{"reasonCode":"invalid_credentials"}',
+  })));
+});
+
+test("invalid login attempts do not take the global expired-session cleanup path", async () => {
+  const instance = await app();
+  const userId = instance.db.prepare(
+    "SELECT id FROM users WHERE email = 'admin@example.test'",
+  ).pluck().get();
+  instance.db.prepare(`
+    INSERT INTO sessions (
+      id, user_id, token_hash, csrf_token, expires_at, created_at, last_seen_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    "expired-session-awaiting-authenticated-cleanup",
+    userId,
+    "expired-session-token-hash",
+    "expired-session-csrf",
+    "2000-01-01T00:00:00.000Z",
+    "2000-01-01T00:00:00.000Z",
+    "2000-01-01T00:00:00.000Z",
+  );
+
+  const invalid = await instance.newClient().login(
+    "unknown.cleanup@example.test",
+    "incorrect-cleanup-password",
+  );
+  assert.equal(invalid.response.status, 401);
+  assert.equal(
+    instance.db.prepare("SELECT COUNT(*) FROM sessions WHERE id = ?")
+      .pluck().get("expired-session-awaiting-authenticated-cleanup"),
+    1,
+  );
+
+  const valid = await instance.newClient().login();
+  assert.equal(valid.response.status, 200);
+  assert.equal(
+    instance.db.prepare("SELECT COUNT(*) FROM sessions WHERE id = ?")
+      .pluck().get("expired-session-awaiting-authenticated-cleanup"),
+    0,
+  );
 });
 
 test("authentication, CSRF and transactional audit controls protect mutations", async () => {
@@ -71,12 +950,22 @@ test("authentication, CSRF and transactional audit controls protect mutations", 
   assert.equal(anonymous.response.status, 401);
   assert.equal(anonymous.response.headers.get("cache-control"), "no-store");
 
+  const invalidSession = await client.request("/api/dashboard", {
+    headers: { cookie: "vector_session=not-a-valid-session" },
+  });
+  assert.equal(invalidSession.response.status, 401);
+  assertApiSessionCookie(
+    invalidSession.response.headers.get("set-cookie"),
+    { cleared: true },
+  );
+
   const unknown = await client.login("nobody@example.test", "incorrect-password");
   assert.equal(unknown.response.status, 401);
   assert.equal(unknown.payload.error.code, "invalid_credentials");
 
   const login = await client.login();
   assert.equal(login.response.status, 200);
+  assertApiSessionCookie(login.response.headers.get("set-cookie"));
   assert.match(login.response.headers.get("set-cookie"), /HttpOnly/i);
   assert.match(login.response.headers.get("set-cookie"), /SameSite=Strict/i);
 
@@ -114,6 +1003,13 @@ test("authentication, CSRF and transactional audit controls protect mutations", 
     () => db.prepare("DELETE FROM audit_events WHERE id = ?").run(audit.id),
     /append-only/,
   );
+
+  const logout = await client.request("/api/auth/logout", {
+    method: "POST",
+    body: {},
+  });
+  assert.equal(logout.response.status, 200);
+  assertApiSessionCookie(logout.response.headers.get("set-cookie"), { cleared: true });
 });
 
 test("logo mutations require a strong branding revision and admit one concurrent winner", async () => {
@@ -226,7 +1122,7 @@ test("a user can replace their own password and revoke every active session", as
     },
   });
   assert.equal(changed.response.status, 200);
-  assert.match(changed.response.headers.get("set-cookie"), /vector_session=;/);
+  assertApiSessionCookie(changed.response.headers.get("set-cookie"), { cleared: true });
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
   assert.equal(
     db.prepare(
@@ -374,6 +1270,92 @@ test("roles enforce school-wide read-only access and tutor assignment boundaries
   });
   assert.equal(viewerWrite.response.status, 403);
   assert.equal(viewerWrite.payload.error.code, "forbidden");
+});
+
+test("assigned tutors cannot enumerate child records on unassigned placements", async () => {
+  const instance = await app({ seedSynthetic: true });
+  const { client } = instance;
+  assert.equal((await client.login()).response.status, 200);
+  const tutorPassword = "scope-tutor-temporary-2026";
+  await createUser(client, {
+    email: "scope.tutor@example.test",
+    displayName: "Scope tutor",
+    password: tutorPassword,
+    role: "tutor",
+    dataScope: "assigned",
+  });
+
+  const placements = await client.request("/api/placements?limit=100&status=active&query=");
+  const placementId = placements.payload.items[0].id;
+  const detail = await client.request(`/api/placements/${placementId}`);
+  const timeEntry = await client.request(`/api/placements/${placementId}/time-entries`, {
+    method: "POST",
+    body: {
+      entryDate: detail.payload.startDate,
+      hours: 1,
+      description: "Unassigned scope probe",
+      verificationStatus: "pending",
+    },
+  });
+  const checkIn = await client.request(`/api/placements/${placementId}/check-ins`, {
+    method: "POST",
+    body: {
+      occurredAt: `${detail.payload.startDate}T10:00:00.000Z`,
+      channel: "phone",
+      summary: "Unassigned scope probe",
+      nextAction: "",
+    },
+  });
+  const document = await client.request(`/api/placements/${placementId}/documents`, {
+    method: "POST",
+    body: {
+      kind: "other",
+      title: "Unassigned scope probe",
+      status: "draft",
+      reference: "",
+      dueDate: null,
+    },
+  });
+  for (const result of [timeEntry, checkIn, document]) {
+    assert.ok([200, 201].includes(result.response.status), JSON.stringify(result.payload));
+  }
+
+  const tutor = instance.newClient();
+  await replaceTemporaryPassword(
+    tutor,
+    "scope.tutor@example.test",
+    tutorPassword,
+    "scope-tutor-permanent-2026",
+  );
+  assert.equal(
+    (await tutor.request(`/api/placements/${placementId}`)).response.status,
+    404,
+  );
+  const probes = [
+    {
+      known: `/api/placements/${placementId}/time-entries/${timeEntry.payload.id}`,
+      missing: `/api/placements/${placementId}/time-entries/missing-time-entry`,
+      body: { revision: 1, description: "Blocked" },
+    },
+    {
+      known: `/api/placements/${placementId}/check-ins/${checkIn.payload.id}`,
+      missing: `/api/placements/${placementId}/check-ins/missing-check-in`,
+      body: { revision: 1, summary: "Blocked" },
+    },
+    {
+      known: `/api/placements/${placementId}/documents/${document.payload.id}`,
+      missing: `/api/placements/${placementId}/documents/missing-document`,
+      body: { revision: document.payload.revision, title: "Blocked" },
+    },
+  ];
+  for (const probe of probes) {
+    const known = await tutor.request(probe.known, { method: "PATCH", body: probe.body });
+    const missing = await tutor.request(probe.missing, { method: "PATCH", body: probe.body });
+    assert.equal(known.response.status, 404);
+    assert.equal(missing.response.status, 404);
+    assert.equal(known.payload.error.code, "not_found");
+    assert.deepEqual(known.payload.error.message, missing.payload.error.message);
+  }
 });
 
 test("operational collections and reference lookups use bounded opaque cursors", async () => {
@@ -1279,6 +2261,50 @@ test("expired-session cleanup applies absolute and exact inactivity boundaries",
   );
 });
 
+test("unknown session cookies stay on a read-only database path", async () => {
+  const instance = await app();
+  instance.db.pragma("query_only = ON");
+  try {
+    assert.equal(
+      readSession(instance.db, "forged-session-cookie", 45, new Date()),
+      null,
+    );
+  } finally {
+    instance.db.pragma("query_only = OFF");
+  }
+});
+
+test("health probes never resolve sessions and only bare probes bypass API accounting", async () => {
+  const instance = await app();
+  assert.equal((await instance.client.login()).response.status, 200);
+  instance.db.prepare(`
+    UPDATE sessions
+    SET last_seen_at = '2000-01-01T00:00:00.000Z'
+  `).run();
+  instance.db.pragma("query_only = ON");
+  try {
+    for (const pathname of ["/api/health/live", "/api/health/ready"]) {
+      const credentialed = await instance.client.request(pathname);
+      assert.equal(credentialed.response.status, 200, pathname);
+      assert.ok(credentialed.response.headers.get("ratelimit-policy"), pathname);
+    }
+  } finally {
+    instance.db.pragma("query_only = OFF");
+  }
+  assert.equal(
+    instance.db.prepare("SELECT COUNT(*) FROM sessions").pluck().get(),
+    1,
+  );
+
+  const bare = await fetch(`${instance.baseUrl}/api/health/live`);
+  assert.equal(bare.status, 200);
+  assert.equal(bare.headers.get("ratelimit-policy"), null);
+
+  const queried = await fetch(`${instance.baseUrl}/api/health/live?probe=browser`);
+  assert.equal(queried.status, 200);
+  assert.ok(queried.headers.get("ratelimit-policy"));
+});
+
 test("session activity updates remain monotonic for out-of-order requests", async () => {
   const instance = await app();
   const login = await instance.client.login();
@@ -1412,6 +2438,145 @@ test("only successful authenticated same-origin requests renew inactivity", asyn
   assert.ok(readLastSeen() > before);
 });
 
+test("successful logins retain only the ten most recent active sessions per user", async () => {
+  const instance = await app();
+  const userId = instance.db.prepare(
+    "SELECT id FROM users WHERE email = 'admin@example.test'",
+  ).pluck().get();
+  assert.throws(
+    () => createSession(instance.db, userId, 12, 45),
+    /active database transaction/,
+  );
+
+  const sequentialClients = Array.from(
+    { length: MAX_ACTIVE_SESSIONS_PER_USER + 2 },
+    () => instance.newClient(),
+  );
+  for (const client of sequentialClients) {
+    const login = await client.login();
+    assert.equal(login.response.status, 200);
+    assertApiSessionCookie(login.response.headers.get("set-cookie"));
+  }
+  assert.equal(
+    instance.db.prepare("SELECT COUNT(*) FROM sessions WHERE user_id = ?")
+      .pluck().get(userId),
+    MAX_ACTIVE_SESSIONS_PER_USER,
+  );
+  for (const client of sequentialClients.slice(0, 2)) {
+    const session = await client.request("/api/session");
+    assert.equal(session.payload.authenticated, false);
+    assertApiSessionCookie(session.response.headers.get("set-cookie"), { cleared: true });
+  }
+  for (const client of sequentialClients.slice(2)) {
+    assert.equal((await client.request("/api/session")).payload.authenticated, true);
+  }
+
+  const concurrentClients = Array.from(
+    { length: MAX_ACTIVE_SESSIONS_PER_USER - 2 },
+    () => instance.newClient(),
+  );
+  const concurrentLogins = await Promise.all(
+    concurrentClients.map((client) => client.login()),
+  );
+  assert.equal(
+    concurrentLogins.filter((result) => result.response.status === 200).length,
+    concurrentClients.length,
+  );
+  assert.equal(
+    instance.db.prepare("SELECT COUNT(*) FROM sessions WHERE user_id = ?")
+      .pluck().get(userId),
+    MAX_ACTIVE_SESSIONS_PER_USER,
+  );
+  assert.equal(
+    instance.db.prepare(`
+      SELECT COUNT(DISTINCT token_hash)
+      FROM sessions
+      WHERE user_id = ?
+    `).pluck().get(userId),
+    MAX_ACTIVE_SESSIONS_PER_USER,
+  );
+
+  const queryPlan = instance.db.prepare(`
+    EXPLAIN QUERY PLAN
+    SELECT id
+    FROM sessions
+    WHERE user_id = ?
+    ORDER BY last_seen_at DESC, created_at DESC, id DESC
+    LIMIT 9
+  `).all(userId).map((row) => row.detail);
+  assert.ok(queryPlan.some((detail) => detail.includes("idx_sessions_user_recency")));
+  assert.equal(queryPlan.some((detail) => detail.includes("TEMP B-TREE")), false);
+
+  const cleanupPlan = instance.db.prepare(`
+    EXPLAIN QUERY PLAN
+    DELETE FROM sessions
+    WHERE expires_at <= ?
+      OR last_seen_at <= ?
+  `).all(
+    "2026-07-31T12:00:00.000Z",
+    "2026-07-31T11:15:00.000Z",
+  ).map((row) => row.detail);
+  assert.ok(cleanupPlan.some((detail) => detail.includes("MULTI-INDEX OR")));
+  assert.ok(cleanupPlan.some((detail) => detail.includes("idx_sessions_expires_at")));
+  assert.ok(cleanupPlan.some((detail) => detail.includes("idx_sessions_last_seen_at")));
+
+  assert.throws(
+    () => instance.db.prepare(`
+      INSERT INTO sessions (
+        id, user_id, token_hash, csrf_token, expires_at, created_at, last_seen_at
+      ) VALUES (
+        'session-trigger-overflow', ?, 'trigger-overflow', 'trigger-overflow',
+        '2099-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z',
+        '2024-01-01T00:00:00.000Z'
+      )
+    `).run(userId),
+    /active session capacity reached/,
+  );
+
+  instance.db.prepare(`
+    UPDATE sessions
+    SET
+      expires_at = '2099-01-01T00:00:00.000Z',
+      last_seen_at = '2000-01-01T00:00:00.000Z'
+    WHERE user_id = ?
+  `).run(userId);
+  const replacement = instance.db.transaction(() => createSession(
+    instance.db,
+    userId,
+    12,
+    45,
+    new Date("2026-07-31T12:00:00.000Z"),
+  )).immediate();
+  assert.ok(replacement.token);
+  assert.equal(
+    instance.db.prepare("SELECT COUNT(*) FROM sessions WHERE user_id = ?")
+      .pluck().get(userId),
+    1,
+  );
+});
+
+test("a successful re-login rotates and revokes the browser's previous session", async () => {
+  const instance = await app();
+  assert.equal((await instance.client.login()).response.status, 200);
+  const previousCookie = instance.client.cookie;
+
+  const replacement = await instance.client.login();
+  assert.equal(replacement.response.status, 200);
+  assert.notEqual(instance.client.cookie, previousCookie);
+  assert.equal(
+    instance.db.prepare("SELECT COUNT(*) FROM sessions").pluck().get(),
+    1,
+  );
+
+  const replay = await instance.newClient().request("/api/dashboard", {
+    headers: { cookie: previousCookie },
+  });
+  assert.equal(replay.response.status, 401);
+  assert.equal(replay.payload.error.code, "authentication_required");
+  assertApiSessionCookie(replay.response.headers.get("set-cookie"), { cleared: true });
+  assert.equal((await instance.client.request("/api/dashboard")).response.status, 200);
+});
+
 test("direct re-login replaces an idle-expired cookie once", async () => {
   const instance = await app();
   const initialLogin = await instance.client.login();
@@ -1429,6 +2594,7 @@ test("direct re-login replaces an idle-expired cookie once", async () => {
   const replacement = await instance.client.login();
   assert.equal(replacement.response.status, 200);
   const setCookie = replacement.response.headers.get("set-cookie");
+  assertApiSessionCookie(setCookie);
   assert.equal(setCookie.match(/vector_session=/g).length, 1);
   assert.doesNotMatch(setCookie, /^vector_session=;/);
   assert.notEqual(instance.client.cookie, oldCookie);
@@ -1459,7 +2625,7 @@ test("failed login clears an idle-expired cookie", async () => {
     "wrong-password-that-must-not-authenticate",
   );
   assert.equal(failed.response.status, 401);
-  assert.match(failed.response.headers.get("set-cookie"), /^vector_session=;/);
+  assertApiSessionCookie(failed.response.headers.get("set-cookie"), { cleared: true });
   assert.equal(instance.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
 });
 
@@ -1479,7 +2645,10 @@ test("idle and absolute expiry remove the database session and browser cookie", 
   const idleExpired = await instance.client.request("/api/dashboard");
   assert.equal(idleExpired.response.status, 401);
   assert.equal(idleExpired.payload.error.code, "authentication_required");
-  assert.match(idleExpired.response.headers.get("set-cookie"), /^vector_session=;/);
+  assertApiSessionCookie(
+    idleExpired.response.headers.get("set-cookie"),
+    { cleared: true },
+  );
   assert.equal(instance.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
 
   const replacementLogin = await instance.client.login();
@@ -1497,6 +2666,9 @@ test("idle and absolute expiry remove the database session and browser cookie", 
   );
   const absoluteExpired = await instance.client.request("/api/dashboard");
   assert.equal(absoluteExpired.response.status, 401);
-  assert.match(absoluteExpired.response.headers.get("set-cookie"), /^vector_session=;/);
+  assertApiSessionCookie(
+    absoluteExpired.response.headers.get("set-cookie"),
+    { cleared: true },
+  );
   assert.equal(instance.db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0);
 });

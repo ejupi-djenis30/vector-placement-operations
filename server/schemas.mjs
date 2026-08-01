@@ -1,5 +1,7 @@
 import * as z from "zod";
 import { AppError } from "./errors.mjs";
+import { PLACEMENT_CHILD_LIMITS } from "./placement-activity-limits.mjs";
+import { MAX_USERS_PER_SCHOOL } from "./user-limits.mjs";
 
 export const id = z.string().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/);
 export const nullableId = id.nullable().optional();
@@ -258,15 +260,15 @@ export const PlacementDetailResponse = PlacementResponse.extend({
   hostAddress: z.string().max(500),
   hostTutorEmail: z.string().max(254),
   notes: longText,
-  timeEntries: z.array(TimeEntryResponse),
-  checkIns: z.array(CheckInResponse),
-  documents: z.array(DocumentResponse),
+  timeEntries: z.array(TimeEntryResponse).max(PLACEMENT_CHILD_LIMITS.timeEntries),
+  checkIns: z.array(CheckInResponse).max(PLACEMENT_CHILD_LIMITS.checkIns),
+  documents: z.array(DocumentResponse).max(PLACEMENT_CHILD_LIMITS.documents),
   readiness: z.object({
     ready: z.boolean(),
     blockers: z.array(z.object({
       code: z.string().max(100),
       message: z.string().max(300),
-    })),
+    })).max(32),
     fingerprint: z.string().length(64).regex(/^[0-9a-f]+$/),
     verifiedHours: z.number().nonnegative(),
     targetHours: z.number().positive(),
@@ -414,7 +416,7 @@ export const UsersResponse = z.object({
     revision: z.number().int().positive(),
     lastLoginAt: timestamp.nullable(),
     createdAt: timestamp,
-  })),
+  })).max(MAX_USERS_PER_SCHOOL),
 });
 
 export const ProgrammeRequirementResponse = z.object({

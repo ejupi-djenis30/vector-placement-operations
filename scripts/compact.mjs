@@ -1,6 +1,6 @@
-import Database from "better-sqlite3";
 import { loadConfig } from "../server/config.mjs";
-import { inspectDatabase } from "./backup-lib.mjs";
+import { openExistingDatabase } from "../server/db.mjs";
+import { inspectDatabaseConnection } from "./backup-lib.mjs";
 import { parseArgs } from "./cli-args.mjs";
 
 const args = parseArgs(process.argv.slice(2), {
@@ -13,10 +13,9 @@ if (args["confirm-maintenance"] !== true) {
 }
 
 const config = loadConfig();
-inspectDatabase(config.databasePath);
-const db = new Database(config.databasePath, { fileMustExist: true, timeout: 5_000 });
+const db = openExistingDatabase(config.databasePath);
 try {
-  db.pragma("foreign_keys = ON");
+  inspectDatabaseConnection(db);
   db.pragma("secure_delete = ON");
   const before = db.pragma("wal_checkpoint(TRUNCATE)")[0];
   if (before.busy !== 0) {

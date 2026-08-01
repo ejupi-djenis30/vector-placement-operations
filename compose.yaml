@@ -20,13 +20,16 @@ services:
       - vector_data:/var/lib/vector
     read_only: true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
+      - /tmp:rw,nodev,noexec,nosuid,size=64m
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
-    stop_grace_period: 30s
+    # The application accepts a shutdown grace of up to 60 seconds. Keep the
+    # container deadline above that ceiling so Docker does not SIGKILL VECTOR
+    # while it is still draining responses and closing SQLite.
+    stop_grace_period: 70s
     healthcheck:
       test:
         - CMD

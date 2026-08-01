@@ -39,6 +39,36 @@ jobs:
       - name: Validate GitHub Actions workflows
         run: '"${RUNNER_TEMP}/actionlint"'
 
+  security:
+    name: Source-tree secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Gitleaks
+        shell: bash
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          printf '%s  %s\n' "${GITLEAKS_SHA256}" "${RUNNER_TEMP}/${archive}" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/${archive}" \
+            --directory "${RUNNER_TEMP}" gitleaks
+          chmod 0755 "${RUNNER_TEMP}/gitleaks"
+      - name: Scan the checked-out source tree
+        run: '"${RUNNER_TEMP}/gitleaks" dir . --redact --no-banner --no-color --exit-code 1'
+
   test:
     name: Node ${{ matrix.node-version }}
     runs-on: ubuntu-24.04
@@ -46,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ["22.23.1", "24.16.0"]
+        node-version: ["22.23.1", "24.18.0"]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,9 +91,12 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Run tests and publication checks
         run: npm run check
+      - name: Enforce native coverage floor
+        if: ${{ matrix.node-version == '24.18.0' }}
+        run: npm run test:coverage
 
   browser-e2e:
-    name: Chromium E2E
+    name: Chromium + WebKit E2E
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -74,12 +107,12 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.16.0
+          node-version: 24.18.0
           package-manager-cache: false
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
-      - name: Install pinned Chromium runtime
-        run: npx --no-install playwright install --with-deps chromium
+      - name: Install pinned browser runtimes
+        run: npx --no-install playwright install --with-deps chromium webkit
       - name: Run browser tests
         run: npm run test:e2e
       - name: Upload failure diagnostics
@@ -104,6 +137,52 @@ jobs:
         run: |
           docker build --check .
           docker build --tag "vector-ci:${GITHUB_SHA}" .
+      - name: Install checksummed Trivy
+        shell: bash
+        env:
+          TRIVY_VERSION: "0.72.0"
+          TRIVY_SHA256: "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
+        run: |
+          set -euo pipefail
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          printf '%s  %s\n' "${TRIVY_SHA256}" "${RUNNER_TEMP}/${archive}" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/${archive}" \
+            --directory "${RUNNER_TEMP}" trivy
+          [[ "$("${RUNNER_TEMP}/trivy" --version)" == "Version: ${TRIVY_VERSION}" ]]
+      - name: Generate container SBOM
+        shell: bash
+        run: >-
+          "${RUNNER_TEMP}/trivy" image
+          --format cyclonedx
+          --output "${RUNNER_TEMP}/vector-container.cdx.json"
+          --no-progress
+          "vector-ci:${GITHUB_SHA}"
+      - name: Upload container SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vector-container-sbom
+          path: ${{ runner.temp }}/vector-container.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce container vulnerability and secret gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/trivy" image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --no-progress \
+            "vector-ci:${GITHUB_SHA}"
+          "${RUNNER_TEMP}/trivy" image \
+            --scanners secret \
+            --exit-code 1 \
+            --no-progress \
+            "vector-ci:${GITHUB_SHA}"
       - name: Run the image with the documented hardening controls
         shell: bash
         run: |
@@ -117,19 +196,33 @@ jobs:
             docker volume rm "${volume_name}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
+          license_sha="$(sha256sum LICENSE | cut -d ' ' -f 1)"
+          image_license_sha="$(
+            docker run --rm --entrypoint sha256sum "vector-ci:${GITHUB_SHA}" \
+              /usr/share/licenses/vector/LICENSE | cut -d ' ' -f 1
+          )"
+          [[ "${image_license_sha}" == "${license_sha}" ]]
+          docker run --rm --entrypoint sh "vector-ci:${GITHUB_SHA}" -c \
+            'test ! -w /app/server/index.mjs \
+              && test ! -w /app/node_modules \
+              && test ! -w /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+              && test ! -w /usr/share/licenses/vector/LICENSE'
           docker volume create "${volume_name}" >/dev/null
           runtime_args=(
             --read-only \
-            --tmpfs "/tmp:rw,noexec,nosuid,size=64m" \
+            --tmpfs "/tmp:rw,nodev,noexec,nosuid,size=64m" \
             --cap-drop ALL \
             --security-opt no-new-privileges:true \
             --pids-limit 256 \
             --mount "type=volume,source=${volume_name},target=/var/lib/vector" \
             --env NODE_ENV=production \
-            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
-            --env VECTOR_COOKIE_SECURE=false
+            --env VECTOR_ORIGIN=https://vector.ci.example.test \
+            --env VECTOR_COOKIE_SECURE=true
           )
           bootstrap_args=(
+            --env VECTOR_BOOTSTRAP_SCHOOL_NAME="CI school" \
+            --env VECTOR_BOOTSTRAP_SCHOOL_SLUG=ci-school \
+            --env VECTOR_BOOTSTRAP_TIME_ZONE=Europe/Zurich \
             --env VECTOR_BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
             --env VECTOR_BOOTSTRAP_ADMIN_NAME="CI administrator" \
             --env VECTOR_BOOTSTRAP_ADMIN_PASSWORD="ci-only-vector-password-2026" \
@@ -184,4 +277,10 @@ jobs:
           docker inspect --format '{{json .HostConfig.CapDrop}}' "${container_name}" | grep --fixed-strings '"ALL"'
           docker inspect --format '{{json .HostConfig.SecurityOpt}}' "${container_name}" \
             | grep --fixed-strings 'no-new-privileges'
-          docker exec "${container_name}" npm run doctor
+          for removed_tool in npm npx corepack yarn yarnpkg pnpm pnpx; do
+            if docker exec "${container_name}" sh -c "command -v ${removed_tool} >/dev/null 2>&1"; then
+              printf 'Unexpected package-manager tool in runtime image: %s\n' "${removed_tool}"
+              exit 1
+            fi
+          done
+          docker exec "${container_name}" node scripts/doctor.mjs

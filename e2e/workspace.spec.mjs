@@ -1,29 +1,43 @@
 import { readFile } from "node:fs/promises";
 
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 const E2E_EMAIL = "vector-e2e-admin@example.test";
 const E2E_BOOTSTRAP_PASSWORD = process.env.VECTOR_E2E_PASSWORD ?? "vector-e2e-password-2026";
 const E2E_PASSWORD = "vector-e2e-permanent-password-2026";
+const COORDINATOR_EMAIL = "coordinator.e2e@example.test";
+const COORDINATOR_TEMP_PASSWORD = "coordinator-temporary-password-2026";
+const COORDINATOR_PASSWORD = "coordinator-accessibility-password-2026";
 const VIEWER_EMAIL = "viewer.e2e@example.test";
 const VIEWER_TEMP_PASSWORD = "viewer-temporary-password-2026";
 const VIEWER_RESET_PASSWORD = "viewer-reset-password-2026";
 const VIEWER_PASSWORD = "viewer-permanent-password-2026";
+const VIEWER_ACCESSIBILITY_PASSWORD = "viewer-accessibility-password-2026";
 const TUTOR_EMAIL = "tutor.e2e@example.test";
 const TUTOR_TEMP_PASSWORD = "tutor-temporary-password-2026";
 const TUTOR_PASSWORD = "tutor-permanent-password-2026";
+const TUTOR_ACCESSIBILITY_PASSWORD = "tutor-accessibility-password-2026";
 const runtimeErrors = new WeakMap();
 const expectedHttpFailures = new WeakMap();
+const expectedConsoleFailures = new WeakMap();
 
 test.beforeEach(async ({ page }) => {
   const errors = [];
   runtimeErrors.set(page, errors);
   expectedHttpFailures.set(page, new Set());
+  expectedConsoleFailures.set(page, new Set());
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const status = Number(message.text().match(/Failed to load resource:.*status of (\d+)/)?.[1]);
     if (status && expectedHttpFailures.get(page)?.has(status)) return;
+    if (
+      [...(expectedConsoleFailures.get(page) ?? [])]
+        .some((pattern) => pattern.test(message.text()))
+    ) {
+      return;
+    }
     errors.push(message.text());
   });
 });
@@ -40,6 +54,17 @@ async function withExpectedHttpFailure(page, status, action) {
   } finally {
     await page.waitForTimeout(50);
     statuses?.delete(status);
+  }
+}
+
+async function withExpectedConsoleFailure(page, pattern, action) {
+  const patterns = expectedConsoleFailures.get(page);
+  patterns?.add(pattern);
+  try {
+    return await action();
+  } finally {
+    await page.waitForTimeout(50);
+    patterns?.delete(pattern);
   }
 }
 
@@ -116,6 +141,17 @@ async function ensureUserViaUi(page, { email, displayName, role, temporaryPasswo
   await expect(page.locator(".user-row").filter({ hasText: email })).toBeVisible();
 }
 
+async function resetUserPasswordViaUi(page, { email, temporaryPassword }) {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const row = page.locator(".user-row").filter({ hasText: email });
+  await expect(row).toHaveCount(1);
+  await row.getByRole("button", { name: "Reset password", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("New temporary password").fill(temporaryPassword);
+  await dialog.getByRole("button", { name: "Reset password", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+}
+
 async function openPlacement(page, studentName) {
   await page.getByRole("button", { name: "Placements", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Every placement, in context." })).toBeVisible();
@@ -124,6 +160,294 @@ async function openPlacement(page, studentName) {
   await row.getByRole("button", { name: "Open" }).click();
   await expect(page.getByRole("heading", { name: /hours logged/ })).toBeVisible();
 }
+
+async function expectWorkspaceSemantics(page, label) {
+  const semantics = await page.evaluate(() => {
+    const headings = [...document.querySelectorAll("main h1, main h2, main h3, main h4, main h5, main h6")]
+      .map((heading) => ({
+        level: Number(heading.localName.slice(1)),
+        text: heading.textContent.trim(),
+      }));
+    return {
+      currentPages: document.querySelectorAll('nav[aria-label="Workspace navigation"] [aria-current="page"]').length,
+      headingJumps: headings
+        .slice(1)
+        .filter((heading, index) => heading.level > headings[index].level + 1),
+      headings,
+      h1Count: document.querySelectorAll("main h1").length,
+      mainCount: document.querySelectorAll("main").length,
+      namedWorkspaceNavCount: document.querySelectorAll('nav[aria-label="Workspace navigation"]').length,
+    };
+  });
+
+  expect(semantics.mainCount, `${label}: one main landmark`).toBe(1);
+  expect(semantics.namedWorkspaceNavCount, `${label}: named workspace navigation`).toBe(1);
+  expect(semantics.currentPages, `${label}: one current navigation item`).toBe(1);
+  expect(semantics.h1Count, `${label}: one page heading`).toBe(1);
+  expect(semantics.headings[0]?.level, `${label}: the outline starts at h1`).toBe(1);
+  expect(semantics.headingJumps, `${label}: heading levels do not skip`).toEqual([]);
+}
+
+async function expectNoWorkspaceOverflow(page, label) {
+  const overflow = await page.evaluate(() => {
+    const viewportWidth = document.documentElement.clientWidth;
+    const selectors = [
+      "#app",
+      ".workspace-sidebar",
+      ".workspace-main",
+      ".workspace-topbar",
+      ".view-header",
+      ".workspace-card",
+      ".loading-card",
+      ".login-card",
+      ".unavailable-card",
+      ".modal",
+      ".modal-card",
+    ];
+    const offenders = [...document.querySelectorAll(selectors.join(","))]
+      .map((node) => {
+        const rect = node.getBoundingClientRect();
+        return {
+          left: Math.round(rect.left * 10) / 10,
+          right: Math.round(rect.right * 10) / 10,
+          selector: node.id ? `#${node.id}` : `.${node.classList[0]}`,
+          width: Math.round(rect.width * 10) / 10,
+        };
+      })
+      .filter(({ left, right, width }) => left < -1 || right > viewportWidth + 1 || width > viewportWidth + 1);
+    return {
+      bodyWidth: document.body.scrollWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      offenders,
+      viewportWidth,
+    };
+  });
+
+  expect(overflow.documentWidth, `${label}: document width`).toBeLessThanOrEqual(overflow.viewportWidth + 1);
+  expect(overflow.bodyWidth, `${label}: body width`).toBeLessThanOrEqual(overflow.viewportWidth + 1);
+  expect(overflow.offenders, `${label}: core workspace surfaces fit the viewport`).toEqual([]);
+}
+
+async function expectCurrentWorkspaceNavigationVisible(page, label) {
+  const layout = await page.evaluate(() => {
+    const navigation = document.querySelector('nav[aria-label="Workspace navigation"]');
+    const current = navigation?.querySelector('[aria-current="page"]');
+    const sidebar = navigation?.closest(".workspace-sidebar");
+    const brand = sidebar?.querySelector(".brand");
+    if (!navigation || !current || !sidebar || !brand) return null;
+    const brandRect = brand.getBoundingClientRect();
+    const navigationRect = navigation.getBoundingClientRect();
+    const currentRect = current.getBoundingClientRect();
+    const sidebarRect = sidebar.getBoundingClientRect();
+    const navigationStyle = getComputedStyle(navigation);
+    let webkitScrollbarDisplay = "";
+    try {
+      webkitScrollbarDisplay = getComputedStyle(navigation, "::-webkit-scrollbar").display;
+    } catch {
+      // Engines without WebKit pseudo-element inspection expose scrollbar-width instead.
+    }
+    return {
+      brandLeft: brandRect.left,
+      brandRight: brandRect.right,
+      brandWidth: brandRect.width,
+      compact: matchMedia("(max-width: 900px)").matches,
+      currentLeft: currentRect.left,
+      currentRight: currentRect.right,
+      currentView: current.dataset.view,
+      navigationClientWidth: navigation.clientWidth,
+      navigationLeft: navigationRect.left,
+      navigationOverflowX: navigationStyle.overflowX,
+      navigationRight: navigationRect.right,
+      navigationScrollLeft: navigation.scrollLeft,
+      navigationScrollWidth: navigation.scrollWidth,
+      nativeScrollbarHidden: navigationStyle.scrollbarWidth === "none"
+        || webkitScrollbarDisplay === "none",
+      pageScrollLeft: window.scrollX,
+      sidebarLeft: sidebarRect.left,
+      sidebarOverflowX: getComputedStyle(sidebar).overflowX,
+      sidebarRight: sidebarRect.right,
+      sidebarScrollLeft: sidebar.scrollLeft,
+    };
+  });
+
+  expect(layout, `${label}: workspace navigation exists`).not.toBeNull();
+  expect(layout.currentLeft, `${label}: current navigation item starts inside the nav`)
+    .toBeGreaterThanOrEqual(layout.navigationLeft - 1);
+  expect(layout.currentRight, `${label}: current navigation item ends inside the nav`)
+    .toBeLessThanOrEqual(layout.navigationRight + 1);
+  expect(layout.pageScrollLeft, `${label}: navigation alignment does not scroll the page`).toBe(0);
+  expect(layout.sidebarScrollLeft, `${label}: navigation alignment does not scroll the sidebar`).toBe(0);
+  expect(layout.brandWidth, `${label}: the workspace brand remains rendered`).toBeGreaterThan(0);
+  expect(layout.brandLeft, `${label}: the workspace brand starts inside the sidebar`)
+    .toBeGreaterThanOrEqual(layout.sidebarLeft - 1);
+  expect(layout.brandRight, `${label}: the workspace brand ends inside the sidebar`)
+    .toBeLessThanOrEqual(layout.sidebarRight + 1);
+  if (layout.compact) {
+    expect(layout.brandRight, `${label}: the mobile brand does not slide underneath the nav`)
+      .toBeLessThanOrEqual(layout.navigationLeft + 1);
+    expect(layout.sidebarOverflowX, `${label}: the mobile sidebar clips only its outer overflow`).toBe("clip");
+    expect(layout.navigationOverflowX, `${label}: the mobile nav remains horizontally scrollable`).toBe("auto");
+    expect(layout.nativeScrollbarHidden, `${label}: the mobile nav hides its native scrollbar`).toBe(true);
+    if (
+      layout.currentView === "settings"
+      && layout.navigationScrollWidth > layout.navigationClientWidth + 1
+    ) {
+      expect(layout.navigationScrollLeft, `${label}: the final current item advances the nav scroll`)
+        .toBeGreaterThan(0);
+    }
+  }
+}
+
+async function expectAxeClean(page, label) {
+  const results = await withExpectedConsoleFailure(
+    page,
+    /^Refused to apply a stylesheet because .*Content Security Policy\.$/,
+    () => new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze(),
+  );
+  const violations = results.violations.map(({ help, id, impact, nodes }) => ({
+    help,
+    id,
+    impact,
+    targets: nodes.map((node) => node.target),
+  }));
+
+  expect(violations, `${label}: WCAG 2.2 AA Axe violations`).toEqual([]);
+  expect(
+    results.incomplete.filter(({ id }) => id === "aria-prohibited-attr"),
+    `${label}: prohibited ARIA attributes must be resolved`,
+  ).toEqual([]);
+}
+
+async function auditWorkspaceView(page, {
+  heading,
+  label,
+  navigation,
+  viewport,
+}) {
+  await page.setViewportSize(viewport);
+  if (navigation) {
+    await page.getByRole("button", { name: navigation, exact: true }).click();
+  }
+  await expect(page.locator(".view-header h1")).toHaveText(heading);
+  await expectWorkspaceSemantics(page, label);
+  await expectNoWorkspaceOverflow(page, label);
+  await expectCurrentWorkspaceNavigationVisible(page, label);
+  await expectAxeClean(page, label);
+}
+
+test("boots the login screen without a redundant health preflight", async ({ page }) => {
+  const apiRequests = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith("/api/")) apiRequests.push(path);
+  });
+  const workspaceAsset = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/app/workspace.mjs",
+  );
+
+  await page.goto("/app/", { waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { name: "Sign in to the workspace." })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Skip to workspace", exact: true }),
+  ).toBeHidden();
+  await expect(page.locator("#app")).not.toHaveAttribute("aria-live");
+  expect(apiRequests).toContain("/api/public/branding");
+  expect(apiRequests).toContain("/api/session");
+  expect(apiRequests).not.toContain("/api/health/live");
+  const bootTimings = await page.evaluate(() => performance.getEntriesByType("resource")
+    .filter((entry) => [
+      "/api/public/branding",
+      "/api/session",
+    ].includes(new URL(entry.name).pathname))
+    .map((entry) => ({
+      duration: entry.duration,
+      path: new URL(entry.name).pathname,
+      startTime: entry.startTime,
+    })));
+  expect(bootTimings).toHaveLength(2);
+  expect(
+    Math.abs(bootTimings[0].startTime - bootTimings[1].startTime),
+  ).toBeLessThan(50);
+  const stylesheetGraph = await page.evaluate(() => performance.getEntriesByType("resource")
+    .filter((entry) => new URL(entry.name).pathname.endsWith(".css"))
+    .map((entry) => ({
+      decodedBytes: entry.decodedBodySize,
+      path: new URL(entry.name).pathname,
+    })));
+  expect(stylesheetGraph.map(({ path }) => path).sort()).toEqual([
+    "/api/public/branding.css",
+    "/styles/shared.css",
+    "/styles/workspace.css",
+  ]);
+  expect(stylesheetGraph.reduce((total, entry) => total + entry.decodedBytes, 0))
+    .toBeLessThanOrEqual(32_000);
+  if (process.env.VECTOR_REPORT_PERFORMANCE === "1") {
+    console.log(`VECTOR_BOOT ${JSON.stringify(bootTimings)}`);
+  }
+  const assetResponse = await workspaceAsset;
+  expect(assetResponse.headers()["content-encoding"]).toMatch(/^(?:br|gzip)$/);
+  expect(assetResponse.headers()["ratelimit-policy"]).toBeUndefined();
+  await expect(page.getByRole("main")).toHaveClass(/login-card/);
+});
+
+test("recovers from a temporary workspace boot outage without reloading the page", async ({ page }) => {
+  await page.setViewportSize({ height: 568, width: 320 });
+  let sessionAttempts = 0;
+  await page.route("**/api/session", async (route) => {
+    sessionAttempts += 1;
+    if (sessionAttempts === 1) {
+      await route.fulfill({
+        body: JSON.stringify({
+          error: {
+            code: "not_ready",
+            message: "The workspace is still starting.",
+            requestId: "vector-e2e-recovery",
+          },
+        }),
+        contentType: "application/json",
+        headers: { "x-request-id": "vector-e2e-recovery" },
+        status: 503,
+      });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await route.continue();
+  });
+
+  await withExpectedHttpFailure(page, 503, () => page.goto("/app/", {
+    waitUntil: "networkidle",
+  }));
+  const heading = page.getByRole("heading", {
+    name: "The workspace is temporarily unavailable.",
+  });
+  await expect(heading).toBeVisible();
+  await expect(heading).toBeFocused();
+  await expect(page.getByRole("main")).toHaveClass(/unavailable-card/);
+  await expect(page.getByText("Request ID: vector-e2e-recovery")).toBeVisible();
+  await expect(page.locator("#app")).not.toHaveAttribute("aria-live");
+  await expect(page.locator("#app")).not.toHaveAttribute("aria-busy");
+  await expectNoWorkspaceOverflow(page, "mobile workspace recovery");
+  await expectAxeClean(page, "mobile workspace recovery");
+  const undersizedActions = await page.locator(".unavailable-actions .button")
+    .evaluateAll((actions) => actions.map((action) => {
+      const rect = action.getBoundingClientRect();
+      return { height: rect.height, width: rect.width };
+    }).filter(({ height, width }) => height < 44 || width < 44));
+  expect(undersizedActions).toEqual([]);
+
+  const retry = page.locator(".unavailable-actions button");
+  await expect(retry).toHaveAccessibleName("Try again");
+  await retry.click();
+  await expect(retry).toBeDisabled();
+  await expect(retry).toHaveText("Trying again…");
+  await expect(page.locator("#app")).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByRole("heading", { name: "Sign in to the workspace." })).toBeVisible();
+  await expect(page.getByRole("main")).toHaveClass(/login-card/);
+  await expect(page.locator("#app")).not.toHaveAttribute("aria-busy");
+  expect(sessionAttempts).toBe(2);
+});
 
 test("forces the bootstrap password to be replaced before loading workspace data", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 });
@@ -164,6 +488,70 @@ test("forces the bootstrap password to be replaced before loading workspace data
   await expect(page.getByRole("heading", { name: /^(?:Keep the next action visible\.|Know what needs attention next\.)$/ })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await expect(page.locator(".workspace-topbar")).toBeInViewport();
+});
+
+test("keeps login, workspace status and dialogs distinct in forced-colors mode", async ({ page }) => {
+  await page.emulateMedia({ forcedColors: "active" });
+  await page.goto("/app/", { waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { name: "Sign in to the workspace." })).toBeVisible();
+  const signInButton = page.getByRole("button", { name: "Sign in", exact: true });
+  await signInButton.focus();
+  const loginStructure = await page.evaluate(() => {
+    const card = getComputedStyle(document.querySelector(".login-card"));
+    const button = getComputedStyle(document.activeElement);
+    return {
+      buttonBackground: button.backgroundColor,
+      buttonBorderWidth: Number.parseFloat(button.borderTopWidth),
+      buttonColor: button.color,
+      cardBorderStyle: card.borderTopStyle,
+      cardBorderWidth: Number.parseFloat(card.borderTopWidth),
+      forcedColors: matchMedia("(forced-colors: active)").matches,
+      outlineStyle: button.outlineStyle,
+      outlineWidth: Number.parseFloat(button.outlineWidth),
+    };
+  });
+  expect(loginStructure.forcedColors).toBe(true);
+  expect(loginStructure.buttonColor).not.toBe(loginStructure.buttonBackground);
+  expect(loginStructure.buttonBorderWidth).toBeGreaterThanOrEqual(1);
+  expect(loginStructure.cardBorderStyle).toBe("solid");
+  expect(loginStructure.cardBorderWidth).toBeGreaterThanOrEqual(1);
+  expect(loginStructure.outlineStyle).toBe("solid");
+  expect(loginStructure.outlineWidth).toBeGreaterThanOrEqual(3);
+
+  await signIn(page);
+  await page.getByRole("button", { name: "Placements", exact: true }).click();
+  await expect(page.locator(".status-pill").first()).toBeVisible();
+  const changePassword = page.getByRole("button", { name: "Change password", exact: true });
+  await changePassword.click();
+  const dialog = page.getByRole("dialog", { name: "Change password", exact: true });
+  await expect(dialog).toBeVisible();
+
+  const workspaceStructure = await page.evaluate(() => {
+    const card = getComputedStyle(document.querySelector(".workspace-card"));
+    const current = getComputedStyle(
+      document.querySelector('.workspace-sidebar nav button[aria-current="page"]'),
+    );
+    const dialogCard = getComputedStyle(document.querySelector(".modal-card"));
+    const status = getComputedStyle(document.querySelector(".status-pill"));
+    return {
+      cardBorderWidth: Number.parseFloat(card.borderTopWidth),
+      currentBackground: current.backgroundColor,
+      currentColor: current.color,
+      dialogBorderStyle: dialogCard.borderTopStyle,
+      dialogBorderWidth: Number.parseFloat(dialogCard.borderTopWidth),
+      statusBorderStyle: status.borderTopStyle,
+      statusBorderWidth: Number.parseFloat(status.borderTopWidth),
+    };
+  });
+
+  expect(workspaceStructure.cardBorderWidth).toBeGreaterThanOrEqual(1);
+  expect(workspaceStructure.currentColor).not.toBe(workspaceStructure.currentBackground);
+  expect(workspaceStructure.statusBorderStyle).toBe("solid");
+  expect(workspaceStructure.statusBorderWidth).toBeGreaterThanOrEqual(1);
+  expect(workspaceStructure.dialogBorderStyle).toBe("solid");
+  expect(workspaceStructure.dialogBorderWidth).toBeGreaterThanOrEqual(2);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
 });
 
 test("signs in to the self-hosted workspace and records a verifiable time entry", async ({ page }) => {
@@ -360,6 +748,33 @@ test("publishes a programme policy and applies its defaults to a new placement",
   await expect(dialog).toHaveCount(0);
 });
 
+test("reports a programme-history outage without an unhandled browser rejection", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Programmes", exact: true }).click();
+  const programmeRow = page.locator(".programme-row").first();
+  await expect(programmeRow).toBeVisible();
+  await page.route(
+    (url) => /\/api\/programmes\/[^/]+\/versions$/.test(url.pathname),
+    async (route) => route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "programme_history_unavailable",
+          message: "Synthetic programme history outage.",
+        },
+      }),
+    }),
+  );
+
+  await withExpectedHttpFailure(page, 503, async () => {
+    await programmeRow.getByRole("button", { name: "Version history", exact: true }).click();
+    await expect(page.getByText("Synthetic programme history outage.", { exact: true }))
+      .toBeVisible();
+  });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
 test("uses revisions for user edits and password resets, and refreshes stale forms", async ({ page }) => {
   await signIn(page);
   await ensureUserViaUi(page, { email: VIEWER_EMAIL, displayName: "E2E Viewer", role: "viewer", temporaryPassword: VIEWER_TEMP_PASSWORD });
@@ -482,8 +897,17 @@ test("clears stale coverage results when a filter refresh fails and recovers", a
   await expect(page.getByText("Coverage could not be loaded.", { exact: true })).toHaveCount(0);
 });
 
-test("clears sensitive Coverage state between sessions without reloading the page", async ({ page }) => {
+test("clears authenticated list and Coverage state between browser sessions", async ({ page }) => {
   await signIn(page);
+  await page.getByRole("button", { name: "Students", exact: true }).click();
+  const studentFilterResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname.endsWith("/api/students")
+      && url.searchParams.get("query") === "SESSION-STUDENT-MARKER";
+  });
+  await page.getByRole("searchbox", { name: "Search students", exact: true })
+    .fill("SESSION-STUDENT-MARKER");
+  await studentFilterResponse;
   await page.getByRole("button", { name: "Coverage", exact: true }).click();
 
   const cohortResponse = page.waitForResponse((response) => {
@@ -516,9 +940,16 @@ test("clears sensitive Coverage state between sessions without reloading the pag
     const url = new URL(request.url());
     return url.pathname.endsWith("/api/coverage");
   });
+  const cleanStudentRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname.endsWith("/api/students");
+  });
   const loginResponse = await submitLogin(page, E2E_PASSWORD);
   expect(loginResponse.ok()).toBeTruthy();
-  const cleanRequest = await cleanCoverageRequest;
+  const [cleanRequest, cleanStudent] = await Promise.all([
+    cleanCoverageRequest,
+    cleanStudentRequest,
+  ]);
   await expect(page.getByRole("heading", { name: "Know what needs attention next." })).toBeVisible();
 
   const cleanUrl = new URL(cleanRequest.url());
@@ -526,11 +957,27 @@ test("clears sensitive Coverage state between sessions without reloading the pag
   expect(cleanUrl.searchParams.get("status")).toBe("all");
   expect(cleanUrl.searchParams.get("cohortId")).toBe("cohort-software");
   expect(cleanUrl.searchParams.get("periodId")).toBe("period-spring-2026");
+  const cleanStudentUrl = new URL(cleanStudent.url());
+  expect(cleanStudentUrl.searchParams.get("query")).toBe("");
+  expect(cleanStudentUrl.searchParams.get("active")).toBe("all");
 
   await page.getByRole("button", { name: "Coverage", exact: true }).click();
   await expect(page.getByRole("searchbox", { name: "Search cohort coverage", exact: true })).toHaveValue("");
   await expect(page.locator('[aria-label="Coverage status filter"]').getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Cohort", { exact: true })).toHaveValue("cohort-software");
+  await page.getByRole("button", { name: "Students", exact: true }).click();
+  await expect(page.getByRole("searchbox", { name: "Search students", exact: true }))
+    .toHaveValue("");
+});
+
+test("clears authenticated notifications at the sign-out boundary", async ({ page }) => {
+  await signIn(page);
+  await expect(page.getByText("Signed in.", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Sign in to the workspace." })).toBeVisible();
+  await expect(page.getByText("Signed in.", { exact: true })).toHaveCount(0);
 });
 
 test("loads every active Coverage reference beyond the first 100 records", async ({ page }) => {
@@ -863,6 +1310,55 @@ test("keeps the signed-in session after a wrong current password", async ({ page
   await expect(page.getByRole("heading", { name: /^(?:Keep the next action visible\.|Know what needs attention next\.)$/ })).toBeVisible();
   await page.getByRole("button", { name: "Placements", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Every placement, in context." })).toBeVisible();
+});
+
+test("recovers an expired session from an open dialog without trapping focus", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Change password", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Change password", exact: true });
+  await expect(dialog).toBeVisible();
+
+  const logoutStatus = await page.evaluate(async () => {
+    const session = await fetch("/api/session", {
+      cache: "no-store",
+      credentials: "same-origin",
+    }).then((response) => response.json());
+    const response = await fetch("/api/auth/logout", {
+      body: "{}",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": session.csrfToken,
+      },
+      method: "POST",
+    });
+    return response.status;
+  });
+  expect(logoutStatus).toBe(200);
+
+  await dialog.getByLabel("Current password").fill(E2E_PASSWORD);
+  await dialog.getByLabel("New password", { exact: true }).fill("unused-new-password-2026");
+  await dialog.getByLabel("Confirm new password", { exact: true }).fill("unused-new-password-2026");
+  const rejected = await withExpectedHttpFailure(page, 401, async () => {
+    const response = page.waitForResponse((candidate) => (
+      candidate.url().endsWith("/api/auth/change-password")
+      && candidate.request().method() === "POST"
+    ));
+    await dialog.getByRole("button", { name: "Change password", exact: true }).click();
+    return response;
+  });
+  expect(rejected.status()).toBe(401);
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#app")).toHaveJSProperty("inert", false);
+  await expect(page.getByRole("heading", { name: "Sign in to the workspace." })).toBeVisible();
+  await expect(page.getByLabel("Email")).toBeFocused();
+  await expect(page.getByText("Your session ended. Sign in to continue.", { exact: true }))
+    .toHaveCount(1);
+  await expect(page.getByText("Sign in to continue.", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Skip to workspace", exact: true }),
+  ).toBeHidden();
 });
 
 
@@ -1354,4 +1850,212 @@ test("paginates, filters and exports a bounded audit trail", async ({ page }) =>
   expect(download.suggestedFilename()).toMatch(/audit.*\.csv$/i);
   const csv = await readFile(await download.path(), "utf8");
   expect(csv).toContain("user.updated");
+});
+
+test("keeps every authenticated role accessible, keyboard-safe and responsive", async ({
+  browserName,
+  page,
+}) => {
+  // This deliberately runs repeated axe, overflow and keyboard audits across
+  // four authenticated roles; WebKit needs more than the generic slow-test budget.
+  test.setTimeout(120_000);
+  const desktop = { height: 900, width: 1440 };
+  const compact = { height: 844, width: 390 };
+  const narrow = { height: 568, width: 320 };
+  const tablet = { height: 1024, width: 768 };
+
+  await signIn(page);
+  expect(await page.evaluate(() => ({
+    dialog: typeof HTMLDialogElement === "function"
+      && typeof HTMLDialogElement.prototype.showModal === "function",
+    download: "download" in HTMLAnchorElement.prototype,
+    fetch: typeof globalThis.fetch === "function",
+    inert: "inert" in HTMLElement.prototype,
+  }))).toEqual({
+    dialog: true,
+    download: true,
+    fetch: true,
+    inert: true,
+  });
+  await ensureUserViaUi(page, {
+    displayName: "E2E Coordinator",
+    email: COORDINATOR_EMAIL,
+    role: "coordinator",
+    temporaryPassword: COORDINATOR_TEMP_PASSWORD,
+  });
+  await ensureUserViaUi(page, {
+    displayName: "E2E Tutor",
+    email: TUTOR_EMAIL,
+    role: "tutor",
+    temporaryPassword: TUTOR_TEMP_PASSWORD,
+  });
+  await ensureUserViaUi(page, {
+    displayName: "E2E Viewer",
+    email: VIEWER_EMAIL,
+    role: "viewer",
+    temporaryPassword: VIEWER_TEMP_PASSWORD,
+  });
+  await resetUserPasswordViaUi(page, {
+    email: COORDINATOR_EMAIL,
+    temporaryPassword: COORDINATOR_TEMP_PASSWORD,
+  });
+  await resetUserPasswordViaUi(page, {
+    email: TUTOR_EMAIL,
+    temporaryPassword: TUTOR_TEMP_PASSWORD,
+  });
+  await resetUserPasswordViaUi(page, {
+    email: VIEWER_EMAIL,
+    temporaryPassword: VIEWER_TEMP_PASSWORD,
+  });
+
+  await auditWorkspaceView(page, {
+    heading: "Know what needs attention next.",
+    label: "administrator overview at 1440px",
+    navigation: "Overview",
+    viewport: desktop,
+  });
+  await auditWorkspaceView(page, {
+    heading: "Every placement, in context.",
+    label: "administrator placements at 768px",
+    navigation: "Placements",
+    viewport: tablet,
+  });
+  await auditWorkspaceView(page, {
+    heading: "Make the workspace your own.",
+    label: "administrator settings at 390px",
+    navigation: "Settings",
+    viewport: compact,
+  });
+
+  const workspaceBrand = page.getByRole("link", { name: "Workspace overview", exact: true });
+  await expect(workspaceBrand).toHaveAttribute("href", "./");
+  await workspaceBrand.click();
+  await expect(page.locator(".view-header h1")).toHaveText("Know what needs attention next.");
+  await expectCurrentWorkspaceNavigationVisible(page, "brand-linked overview at 390px");
+
+  await page.getByRole("button", { name: "Attention", exact: true }).click();
+  await page.getByRole("searchbox", { name: "Search attention items", exact: true }).fill("Maya");
+  const mayaAttention = page.getByRole("row").filter({
+    has: page.getByRole("button", { name: "Open placement", exact: true }),
+    hasText: "Maya Keller",
+  }).first();
+  await expect(mayaAttention).toBeVisible();
+  await mayaAttention.getByRole("button", { name: "Open placement", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Maya Keller", exact: true })).toBeVisible();
+  await expectCurrentWorkspaceNavigationVisible(page, "placement opened from Attention at 390px");
+
+  await page.setViewportSize(narrow);
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  const keyboardSettings = page.getByRole("button", { name: "Settings", exact: true });
+  await keyboardSettings.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".view-header h1")).toHaveText("Make the workspace your own.");
+  await expect(page.locator(".view-header h1")).toBeFocused();
+  await expectCurrentWorkspaceNavigationVisible(page, "keyboard-selected settings at 320px");
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.locator(".view-header h1")).toHaveText("Know what needs attention next.");
+  await page.keyboard.press("Tab");
+  const skipLink = page.getByRole("link", { name: "Skip to workspace", exact: true });
+  if (
+    browserName === "webkit"
+    && !await skipLink.evaluate((node) => node === document.activeElement)
+  ) {
+    // WebKit inherits Safari's platform full-keyboard-access preference.
+    await skipLink.focus();
+  }
+  await expect(skipLink).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main")).toBeFocused();
+  await page.keyboard.press("Tab");
+  const changePassword = page.getByRole("button", { name: "Change password", exact: true });
+  await expect(changePassword).toBeFocused();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Change password", exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator("#app")).toHaveJSProperty("inert", true);
+  await expect(dialog.getByLabel("Current password")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  const closeDialog = dialog.getByRole("button", { name: "Close dialog", exact: true });
+  await expect(closeDialog).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "Change password", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeDialog).toBeFocused();
+  await expectNoWorkspaceOverflow(page, "change-password dialog at 320px");
+  await expectAxeClean(page, "change-password dialog at 320px");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#app")).toHaveJSProperty("inert", false);
+  await expect(changePassword).toBeFocused();
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signInAs(page, {
+    email: COORDINATOR_EMAIL,
+    permanentPassword: COORDINATOR_PASSWORD,
+    temporaryPassword: COORDINATOR_TEMP_PASSWORD,
+  });
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Coverage", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Audit", exact: true })).toBeVisible();
+  await auditWorkspaceView(page, {
+    heading: "Every student, accounted for.",
+    label: "coordinator coverage at 390px",
+    navigation: "Coverage",
+    viewport: compact,
+  });
+  await auditWorkspaceView(page, {
+    heading: "Rules that stay with the placement.",
+    label: "coordinator programmes at 1440px",
+    navigation: "Programmes",
+    viewport: desktop,
+  });
+  await auditWorkspaceView(page, {
+    heading: "Changes leave a trace.",
+    label: "coordinator audit at 390px",
+    navigation: "Audit",
+    viewport: compact,
+  });
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signInAs(page, {
+    email: TUTOR_EMAIL,
+    permanentPassword: TUTOR_ACCESSIBILITY_PASSWORD,
+    temporaryPassword: TUTOR_TEMP_PASSWORD,
+  });
+  await expect(page.getByRole("button", { name: "Coverage", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Audit", exact: true })).toHaveCount(0);
+  await auditWorkspaceView(page, {
+    heading: "Every placement, in context.",
+    label: "tutor placements at 320px",
+    navigation: "Placements",
+    viewport: narrow,
+  });
+  await auditWorkspaceView(page, {
+    heading: "Students",
+    label: "tutor students at 390px",
+    navigation: "Students",
+    viewport: compact,
+  });
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signInAs(page, {
+    email: VIEWER_EMAIL,
+    permanentPassword: VIEWER_ACCESSIBILITY_PASSWORD,
+    temporaryPassword: VIEWER_TEMP_PASSWORD,
+  });
+  await expect(page.getByRole("button", { name: "Coverage", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Audit", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toHaveCount(0);
+  await auditWorkspaceView(page, {
+    heading: "Know what needs attention next.",
+    label: "viewer overview at 1440px",
+    navigation: "Overview",
+    viewport: desktop,
+  });
+  await auditWorkspaceView(page, {
+    heading: "Hosts",
+    label: "viewer hosts at 390px",
+    navigation: "Hosts",
+    viewport: compact,
+  });
 });

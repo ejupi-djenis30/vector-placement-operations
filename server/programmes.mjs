@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { writeAudit } from "./audit.mjs";
 import { AppError, conflict, notFound } from "./errors.mjs";
+import { assertPlacementChildCapacity } from "./placement-activity-limits.mjs";
 import { requirePermission } from "./rbac.mjs";
 import { hoursToMinutes, minutesToHours } from "./validation.mjs";
 
@@ -417,6 +418,14 @@ export function seedPlacementRequirements(
   now = new Date().toISOString(),
 ) {
   const requirements = readRequirements(db, programmeVersionId);
+  if (requirements.length > 0) {
+    assertPlacementChildCapacity(
+      db,
+      "documents",
+      placementId,
+      requirements.length,
+    );
+  }
   const insert = db.prepare(`
     INSERT INTO placement_documents (
       id,

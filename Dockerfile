@@ -1,18 +1,20 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS dependencies
+FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS dependencies
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends g++ make python3 \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache g++ make python3
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund \
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && cd node_modules/better-sqlite3 \
+    && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --release --force_build=1 \
+    && rm -rf prebuilds \
+    && cd /app \
     && npm cache clean --force
 
-FROM node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS runtime
+FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS runtime
 
 ARG VECTOR_BUILD_REVISION=unknown
 
@@ -28,12 +30,26 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
-COPY --chown=node:node package.json package-lock.json ./
-COPY --chown=node:node migrations ./migrations
-COPY --chown=node:node server ./server
-COPY --chown=node:node site ./site
-COPY --chown=node:node \
+RUN rm -rf \
+      /usr/local/lib/node_modules/npm \
+      /usr/local/lib/node_modules/corepack \
+      /opt/yarn-v1.22.22 \
+    && rm -f \
+      /usr/local/bin/npm \
+      /usr/local/bin/npx \
+      /usr/local/bin/corepack \
+      /usr/local/bin/yarn \
+      /usr/local/bin/yarnpkg \
+      /usr/local/bin/pnpm \
+      /usr/local/bin/pnpx
+
+COPY --from=dependencies --chown=root:root /app/node_modules ./node_modules
+COPY --chown=root:root package.json package-lock.json ./
+COPY --chown=root:root LICENSE /usr/share/licenses/vector/LICENSE
+COPY --chown=root:root migrations ./migrations
+COPY --chown=root:root server ./server
+COPY --chown=root:root site ./site
+COPY --chown=root:root \
     scripts/backup-lib.mjs \
     scripts/backup.mjs \
     scripts/cli-args.mjs \
@@ -45,7 +61,10 @@ COPY --chown=node:node \
     scripts/restore.mjs \
     ./scripts/
 
-RUN mkdir -p /var/lib/vector \
+RUN chown -R root:root /app \
+    && chmod -R go-w /app \
+    && chmod 0444 /usr/share/licenses/vector/LICENSE \
+    && mkdir -p /var/lib/vector \
     && chown node:node /var/lib/vector \
     && chmod 0700 /var/lib/vector
 
@@ -57,4 +76,5 @@ VOLUME ["/var/lib/vector"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["node", "-e", "const p=process.env.VECTOR_PORT||'4173';fetch('http://127.0.0.1:'+p+'/api/health/ready').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 
+ENTRYPOINT []
 CMD ["node", "server/index.mjs"]

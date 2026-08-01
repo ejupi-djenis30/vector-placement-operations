@@ -3,9 +3,10 @@ import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveE2ePorts } from "./e2e-ports.mjs";
 
 const HOST = "127.0.0.1";
-const PORT = 4174;
+const { presentation: PORT } = resolveE2ePorts();
 const PAGE_PATH = "/vector-placement-operations/";
 const SITE_ROOT = fileURLToPath(new URL("../site/", import.meta.url));
 const SITE_PREFIX = SITE_ROOT.endsWith(sep) ? SITE_ROOT : SITE_ROOT + sep;

@@ -62,9 +62,11 @@ signed-in administrator's school. Missing, inactive or ambiguous references reje
 
 Send the completed file as `text/csv`. Start with `dryRun=true`, review the returned row errors and
 counts, then repeat the same validated file with `dryRun=false`. A dry run performs the same
-validation but writes no records or audit event. Import is atomic: VECTOR does not commit a partial
-set when validation fails. A committed import records one aggregated audit event instead of copying
-every input value into the audit trail. One import can contain at most 10,000 data rows.
+validation but writes no records or audit event. Import is atomic: for a commit, VECTOR revalidates
+duplicates and active references while holding the same immediate write transaction used for every
+insert and its audit event. It does not commit a partial set when validation fails. A committed
+import records one aggregated audit event instead of copying every input value into the audit trail.
+One import can contain at most 10,000 data rows; parsing stops at the first row beyond that ceiling.
 
 The endpoints require an authenticated user with the necessary role and data scope. Browser session
 and request-forgery protections still apply; do not weaken them to automate an import.
@@ -149,7 +151,7 @@ history or internal relationships.
 
 Use a verified database backup for a complete move between compatible VECTOR installations. Follow
 [backup and restore](backup-restore.md), deploy the same application release at the destination and
-run `npm run doctor` before allowing users to sign in.
+run `docker compose exec vector node scripts/doctor.mjs` before allowing users to sign in.
 
 ## Operational record
 

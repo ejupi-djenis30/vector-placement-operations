@@ -81,7 +81,7 @@ test("direct start loads production clean-install settings from .env", async (co
   const bootstrapPassword = "clean-install-password-2026";
   const environmentLines = [
     "NODE_ENV=production",
-    `VECTOR_ORIGIN=http://127.0.0.1:${port}`,
+    "VECTOR_ORIGIN=https://vector.clean-install.example.test",
     "VECTOR_HOST=127.0.0.1",
     `VECTOR_PORT=${port}`,
     `VECTOR_DB_PATH=${databasePath.replaceAll("\\", "/")}`,
@@ -90,7 +90,7 @@ test("direct start loads production clean-install settings from .env", async (co
     "VECTOR_BOOTSTRAP_TIME_ZONE=Europe/Zurich",
     "VECTOR_BOOTSTRAP_ADMIN_EMAIL=clean.admin@example.test",
     "VECTOR_BOOTSTRAP_ADMIN_NAME=Clean administrator",
-    "VECTOR_COOKIE_SECURE=false",
+    "VECTOR_COOKIE_SECURE=true",
     "VECTOR_TRUST_PROXY=false",
     "VECTOR_SEED_SYNTHETIC=false",
     "VECTOR_LOG_LEVEL=silent",

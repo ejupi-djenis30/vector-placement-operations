@@ -21,6 +21,12 @@ import {
   replacePlacementRequirements,
   seedPlacementRequirements,
 } from "./programmes.mjs";
+import {
+  assertPlacementChildCapacity,
+  assertPlacementChildrenWithinCapacity,
+  boundedPlacementChildRows,
+  PLACEMENT_CHILD_LIMITS,
+} from "./placement-activity-limits.mjs";
 
 const STATUS_TRANSITIONS = Object.freeze({
   planned: new Set(["active", "cancelled"]),
@@ -114,12 +120,13 @@ function pageRows(
   };
 }
 
-function commitWithAudit(db, mutate, audit) {
-  return db.transaction(() => {
+function commitWithAudit(db, mutate, audit, { immediate = false } = {}) {
+  const transaction = db.transaction(() => {
     const result = mutate();
     writeAudit(db, audit);
     return result;
-  })();
+  });
+  return immediate ? transaction.immediate() : transaction();
 }
 
 function assertPlacementActivitiesMutable(placement) {
@@ -201,9 +208,17 @@ function assertPlacementChildrenWithinRange(db, schoolId, placementId, startDate
           AND (entry_date < @startDate OR entry_date > @endDate)
       ) AS timeEntries
   `).get({ placementId, startDate, endDate });
-  const checkIns = db.prepare(
-    "SELECT occurred_at AS occurredAt FROM check_ins WHERE placement_id = ?",
-  ).all(placementId).filter((row) => {
+  const checkInRows = boundedPlacementChildRows(db.prepare(`
+    SELECT occurred_at AS occurredAt
+    FROM check_ins
+    WHERE placement_id = ?
+    ORDER BY occurred_at DESC, id
+    LIMIT ?
+  `).all(
+    placementId,
+    PLACEMENT_CHILD_LIMITS.checkIns + 1,
+  ), "checkIns");
+  const checkIns = checkInRows.filter((row) => {
     const date = schoolDateForInstant(db, schoolId, row.occurredAt);
     return date < startDate || date > endDate;
   }).length;
@@ -998,36 +1013,53 @@ export function listCoverage(
 
 export function readDashboard(db, user, now = new Date()) {
   const scope = placementScope(user);
-  const rows = db.prepare(`
+  const metrics = db.prepare(`
     SELECT
-      p.status,
-      p.target_minutes,
-      COALESCE((
-        SELECT SUM(te.minutes)
-        FROM time_entries te
-        WHERE te.placement_id = p.id AND te.verification_status != 'rejected'
+      COUNT(*) AS placements,
+      COALESCE(SUM(p.status = 'active'), 0) AS active,
+      COALESCE(SUM(p.status = 'review'), 0) AS review,
+      COALESCE(SUM(p.status = 'complete'), 0) AS complete,
+      COALESCE(SUM(
+        CASE WHEN p.status != 'cancelled' THEN p.target_minutes ELSE 0 END
+      ), 0) AS target_minutes,
+      COALESCE(SUM(
+        CASE WHEN p.status != 'cancelled' THEN COALESCE((
+          SELECT SUM(te.minutes)
+          FROM time_entries te
+          WHERE te.placement_id = p.id
+            AND te.verification_status != 'rejected'
+        ), 0) ELSE 0 END
       ), 0) AS logged_minutes,
-      ${documentGapsExpression("p")} AS document_gaps
+      COALESCE(SUM(${documentGapsExpression("p")}), 0) AS document_gaps
     FROM placements p
     WHERE ${scope}
-  `).all(params(user));
+  `).get(params(user));
 
-  const completionRows = rows.filter((row) => row.status !== "cancelled");
-  const targetMinutes = completionRows.reduce((total, row) => total + row.target_minutes, 0);
-  const loggedMinutes = completionRows.reduce((total, row) => total + row.logged_minutes, 0);
   const today = currentSchoolDate(db, user.schoolId, now);
   return {
-    placements: rows.length,
-    active: rows.filter((row) => row.status === "active").length,
-    review: rows.filter((row) => row.status === "review").length,
-    complete: rows.filter((row) => row.status === "complete").length,
-    completion: targetMinutes === 0 ? 0 : Math.min(100, Math.round(loggedMinutes / targetMinutes * 100)),
-    documentGaps: rows.reduce((total, row) => total + row.document_gaps, 0),
+    placements: metrics.placements,
+    active: metrics.active,
+    review: metrics.review,
+    complete: metrics.complete,
+    completion: metrics.target_minutes === 0
+      ? 0
+      : Math.min(
+        100,
+        Math.round(metrics.logged_minutes / metrics.target_minutes * 100),
+      ),
+    documentGaps: metrics.document_gaps,
     attention: readAttentionSummary(db, user, today),
   };
 }
 
-export function placementReadiness(db, placementId) {
+export function placementReadiness(
+  db,
+  placementId,
+  { capacitiesVerified = false } = {},
+) {
+  if (!capacitiesVerified) {
+    assertPlacementChildrenWithinCapacity(db, placementId);
+  }
   const placement = db.prepare(`
     SELECT
       p.target_minutes AS targetMinutes,
@@ -1050,7 +1082,7 @@ export function placementReadiness(db, placementId) {
   const checkIns = db.prepare(
     "SELECT COUNT(*) AS count FROM check_ins WHERE placement_id = ? AND voided = 0",
   ).get(placementId).count;
-  const documentRows = db.prepare(`
+  const documentRows = boundedPlacementChildRows(db.prepare(`
       SELECT
         id,
         kind,
@@ -1060,7 +1092,11 @@ export function placementReadiness(db, placementId) {
       FROM placement_documents
       WHERE placement_id = ?
       ORDER BY kind, id
-    `).all(placementId);
+      LIMIT ?
+    `).all(
+    placementId,
+    PLACEMENT_CHILD_LIMITS.documents + 1,
+  ), "documents");
   const requirementRows = db.prepare(`
     SELECT
       id,
@@ -1290,7 +1326,7 @@ export function getPlacement(db, user, placementId) {
   `).get({ ...params(user), placementId });
   if (!row) throw notFound("Placement");
 
-  const timeEntries = db.prepare(`
+  const timeEntryRows = boundedPlacementChildRows(db.prepare(`
     SELECT
       id,
       entry_date AS entryDate,
@@ -1302,14 +1338,19 @@ export function getPlacement(db, user, placementId) {
       created_at AS createdAt
     FROM time_entries
     WHERE placement_id = ?
-    ORDER BY entry_date DESC, created_at DESC
-  `).all(placementId).map((entry) => ({
+    ORDER BY entry_date DESC, created_at DESC, id
+    LIMIT ?
+  `).all(
+    placementId,
+    PLACEMENT_CHILD_LIMITS.timeEntries + 1,
+  ), "timeEntries");
+  const timeEntries = timeEntryRows.map((entry) => ({
     ...entry,
     hours: minutesToHours(entry.minutes),
     canEdit: !["complete", "cancelled"].includes(row.status)
       && (hasPermission(user, "write") || entry.createdBy === user.id),
   }));
-  const checkIns = db.prepare(`
+  const checkInRows = boundedPlacementChildRows(db.prepare(`
     SELECT
       id,
       occurred_at AS occurredAt,
@@ -1323,8 +1364,13 @@ export function getPlacement(db, user, placementId) {
       created_at AS createdAt
     FROM check_ins
     WHERE placement_id = ?
-    ORDER BY occurred_at DESC
-  `).all(placementId).map((checkIn) => ({
+    ORDER BY occurred_at DESC, id
+    LIMIT ?
+  `).all(
+    placementId,
+    PLACEMENT_CHILD_LIMITS.checkIns + 1,
+  ), "checkIns");
+  const checkIns = checkInRows.map((checkIn) => ({
     ...checkIn,
     voided: checkIn.voided === 1,
     canEdit: checkIn.voided !== 1
@@ -1334,7 +1380,7 @@ export function getPlacement(db, user, placementId) {
       && !["complete", "cancelled"].includes(row.status)
       && hasPermission(user, "write"),
   }));
-  const documents = db.prepare(`
+  const documentRows = boundedPlacementChildRows(db.prepare(`
     SELECT
       pd.id,
       pd.kind,
@@ -1353,8 +1399,13 @@ export function getPlacement(db, user, placementId) {
     FROM placement_documents pd
     LEFT JOIN programme_requirements pr ON pr.id = pd.requirement_id
     WHERE pd.placement_id = ?
-    ORDER BY pd.due_date IS NULL, pd.due_date, pd.title
-  `).all(placementId).map((document) => ({
+    ORDER BY pd.due_date IS NULL, pd.due_date, pd.title, pd.id
+    LIMIT ?
+  `).all(
+    placementId,
+    PLACEMENT_CHILD_LIMITS.documents + 1,
+  ), "documents");
+  const documents = documentRows.map((document) => ({
     ...document,
     superseded: document.supersededAt !== null,
     canEdit: document.supersededAt === null
@@ -1388,7 +1439,7 @@ export function getPlacement(db, user, placementId) {
     timeEntries,
     checkIns,
     documents,
-    readiness: placementReadiness(db, placementId),
+    readiness: placementReadiness(db, placementId, { capacitiesVerified: true }),
   };
 }
 
@@ -2333,7 +2384,7 @@ export function createPlacement(db, user, input, requestId) {
       programmeVersion: programme.version,
     },
     requestId,
-  });
+  }, { immediate: true });
   return id;
 }
 
@@ -2583,7 +2634,7 @@ export function updatePlacement(db, user, placementId, input, requestId) {
         : {}),
     },
     requestId,
-  });
+  }, { immediate: true });
   return input.revision + 1;
 }
 
@@ -2615,6 +2666,7 @@ export function addTimeEntry(db, user, placementId, input, requestId) {
     ? input.verificationStatus ?? "pending"
     : "pending";
   commitWithAudit(db, () => {
+    assertPlacementChildCapacity(db, "timeEntries", placementId);
     assertStudentDailyMinutes(
       db,
       user.schoolId,
@@ -2648,7 +2700,7 @@ export function addTimeEntry(db, user, placementId, input, requestId) {
     entityId: id,
     metadata: { status: verificationStatus },
     requestId,
-  });
+  }, { immediate: true });
   return id;
 }
 
@@ -2661,7 +2713,9 @@ export function addCheckIn(db, user, placementId, input, requestId) {
   assertCheckInTime(db, user.schoolId, placement, input.occurredAt);
   const id = randomUUID();
   const now = new Date().toISOString();
-  commitWithAudit(db, () => db.prepare(`
+  commitWithAudit(db, () => {
+    assertPlacementChildCapacity(db, "checkIns", placementId);
+    return db.prepare(`
       INSERT INTO check_ins (
         id, school_id, placement_id, occurred_at, channel, summary,
         next_action, created_by, created_at, updated_at
@@ -2677,7 +2731,8 @@ export function addCheckIn(db, user, placementId, input, requestId) {
       user.id,
       now,
       now,
-    ), {
+    );
+  }, {
     schoolId: user.schoolId,
     actorUserId: user.id,
     action: "check_in.created",
@@ -2685,7 +2740,7 @@ export function addCheckIn(db, user, placementId, input, requestId) {
     entityId: id,
     metadata: {},
     requestId,
-  });
+  }, { immediate: true });
   return id;
 }
 
@@ -2802,7 +2857,9 @@ export function addDocument(db, user, placementId, input, requestId) {
   `).get(placementId, user.schoolId, input.kind);
   const id = randomUUID();
   const now = new Date().toISOString();
-  commitWithAudit(db, () => db.prepare(`
+  commitWithAudit(db, () => {
+    assertPlacementChildCapacity(db, "documents", placementId);
+    return db.prepare(`
       INSERT INTO placement_documents (
         id, school_id, placement_id, kind, title, status, reference, due_date,
         requirement_id, created_at, updated_at
@@ -2819,7 +2876,8 @@ export function addDocument(db, user, placementId, input, requestId) {
       compatibleRequirement?.id ?? null,
       now,
       now,
-    ), {
+    );
+  }, {
     schoolId: user.schoolId,
     actorUserId: user.id,
     action: "document.created",
@@ -2830,7 +2888,7 @@ export function addDocument(db, user, placementId, input, requestId) {
       programmeRequirement: Boolean(compatibleRequirement),
     },
     requestId,
-  });
+  }, { immediate: true });
   return { id, revision: 1, created: true };
 }
 
@@ -2851,8 +2909,10 @@ export function updateTimeEntry(db, user, placementId, entryId, input, requestId
       p.status AS placementStatus
     FROM time_entries te
     JOIN placements p ON p.id = te.placement_id
-    WHERE te.id = ? AND te.placement_id = ? AND p.school_id = ?
-  `).get(entryId, placementId, user.schoolId);
+    WHERE te.id = @entryId
+      AND te.placement_id = @placementId
+      AND ${placementScope(user)}
+  `).get({ entryId, placementId, ...params(user) });
   if (!entry) throw notFound("Time entry");
   if (!canWritePlacement(user, entry)) {
     throw new AppError(403, "forbidden", "This placement is outside your assigned scope.");
@@ -2965,8 +3025,10 @@ export function updateCheckIn(db, user, placementId, checkInId, input, requestId
       p.status AS placementStatus
     FROM check_ins ci
     JOIN placements p ON p.id = ci.placement_id
-    WHERE ci.id = ? AND ci.placement_id = ? AND p.school_id = ?
-  `).get(checkInId, placementId, user.schoolId);
+    WHERE ci.id = @checkInId
+      AND ci.placement_id = @placementId
+      AND ${placementScope(user)}
+  `).get({ checkInId, placementId, ...params(user) });
   if (!current) throw notFound("Check-in");
   if (!canWritePlacement(user, current)) {
     throw new AppError(403, "forbidden", "This placement is outside your assigned scope.");
@@ -3082,8 +3144,10 @@ export function updateDocument(db, user, placementId, documentId, input, request
       p.status AS placementStatus
     FROM placement_documents pd
     JOIN placements p ON p.id = pd.placement_id
-    WHERE pd.id = ? AND pd.placement_id = ? AND p.school_id = ?
-  `).get(documentId, placementId, user.schoolId);
+    WHERE pd.id = @documentId
+      AND pd.placement_id = @placementId
+      AND ${placementScope(user)}
+  `).get({ documentId, placementId, ...params(user) });
   if (!document) throw notFound("Document");
   if (!canWritePlacement(user, document)) {
     throw new AppError(403, "forbidden", "This placement is outside your assigned scope.");
@@ -3249,7 +3313,8 @@ export function supersedeDocument(db, user, placementId, documentId, input, requ
   assertDocumentDueDate(document, input.dueDate);
   const replacementId = randomUUID();
   const now = new Date().toISOString();
-  db.transaction(() => {
+  const transaction = db.transaction(() => {
+    assertPlacementChildCapacity(db, "documents", placementId);
     const marked = db.prepare(`
       UPDATE placement_documents
       SET
@@ -3299,7 +3364,8 @@ export function supersedeDocument(db, user, placementId, documentId, input, requ
       },
       requestId,
     });
-  })();
+  });
+  transaction.immediate();
   return {
     id: replacementId,
     revision: 1,
@@ -3622,7 +3688,7 @@ export function runRetention(
       false,
       snapshot.studentIds.length,
     );
-  })();
+  }).immediate();
   result.cleanupPending = checkpointAfterRetention(db);
   return result;
 }

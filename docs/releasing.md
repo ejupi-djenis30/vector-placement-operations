@@ -11,7 +11,7 @@ A stable release is eligible for publication only when all of these statements a
 
 1. `package.json`, `package-lock.json` and `CHANGELOG.md` declare the same stable version.
 2. The canonical MIT license is present; unit, integration, browser and publication tests pass.
-3. The production dependency audit passes and the container builds successfully.
+3. The production dependency, container vulnerability and secret audits pass.
 4. The tag is named `v<version>`, annotated, GitHub-verified and points directly to a commit.
 5. That commit is the current default-branch head when publication begins.
 6. The annotated tagger and signing key match `release-policy.json`.
@@ -29,13 +29,24 @@ Work from a clean reviewed commit and use the locked dependency graph:
 ```bash
 npm ci --no-audit --no-fund
 npm run check
-npx --no-install playwright install chromium
+npm run test:coverage
+npx --no-install playwright install chromium webkit
 npm run test:e2e
 docker build --check .
-docker build .
+docker build --tag vector-release-audit .
+trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 vector-release-audit
+trivy image --scanners secret --exit-code 1 vector-release-audit
 ```
 
+Use a current trusted Trivy binary and freshly updated databases. Do not waive a finding silently;
+review upstream status and either move to a clean pinned base or record an explicit release blocker.
 Do not place an `.env`, SQLite database or backup inside the release candidate.
+
+CI and release readiness install the exact Trivy binary declared in the workflow and verify its
+published SHA-256 before execution. They fail on high or critical image vulnerabilities and any
+image secret finding, and upload a CycloneDX container SBOM. The vulnerability database is
+deliberately refreshed rather than frozen: executable tooling is reproducible, while the gate must
+reflect disclosures available at the time of the run.
 
 ## Build and compare candidates
 
@@ -142,11 +153,18 @@ fails, and never move or reuse a tag.
 
 The tag workflow repeats every test and reproducibility check. It builds the candidate, accepts the
 extracted archives, then builds the exact Docker image with the source revision label. The smoke
-gate runs that image with a read-only root filesystem, dropped capabilities and a private data
-volume; checks readiness and `doctor`; verifies clean `SIGTERM` shutdown; and exercises backup,
+gate confirms that `/app` is root-owned and non-writable by the runtime user even without
+read-only mode, then runs the image with a read-only root filesystem, a bounded `nodev`, `noexec`,
+`nosuid` temporary filesystem, dropped capabilities and a private data volume; checks readiness
+and `doctor`; verifies clean `SIGTERM` shutdown; and exercises backup,
 post-transfer inspection, restore, diagnostics and maintenance compaction on a second volume.
 Ubuntu and Windows independently rebuild into runner-temporary directories and compare every
 candidate byte.
+
+The runtime image also contains the canonical project license at
+`/usr/share/licenses/vector/LICENSE`; CI compares its SHA-256 digest with the repository copy.
+The CycloneDX container SBOM remains the machine-readable inventory for dependency identities and
+license metadata.
 
 Only after those jobs pass does the final job verify the remote annotated tag through the GitHub
 API, attest the assets, create an exact draft and publish after GitHub marks the release immutable.

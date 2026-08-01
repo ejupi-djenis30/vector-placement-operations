@@ -7,13 +7,15 @@
     <meta name="theme-color" content="#17324d" />
     <meta name="robots" content="noindex, nofollow" />
     <meta name="referrer" content="same-origin" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-src 'none'; media-src 'none'; worker-src 'none'" />
     <link rel="icon" href="../assets/vector-mark.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="../styles.css" />
+    <link rel="stylesheet" href="../styles/shared.css" />
+    <link rel="stylesheet" href="../styles/workspace.css" />
     <link id="runtime-branding" rel="stylesheet" href="../api/public/branding.css" />
     <title>VECTOR — Workspace</title>
   </head>
   <body class="workspace-page">
-    <a class="skip-link" href="#workspace-main">Skip to workspace</a>
+    <a class="skip-link" href="#workspace-main" hidden>Skip to workspace</a>
     <div id="app" class="app-loading" aria-live="polite">
       <div class="loading-card"><i aria-hidden="true"></i><p>Loading workspace…</p></div>
     </div>
