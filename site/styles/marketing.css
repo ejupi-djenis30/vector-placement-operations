@@ -328,7 +328,7 @@ h1 em, .control-copy em { color: var(--coral); font-family: Georgia, serif; font
 @media (max-width: 30rem) {
   .marketing-page .marketing-hero h1 {
     max-width: 100%;
-    font-size: clamp(2.9rem, 16.5vw, 4rem);
+    font-size: clamp(2.9rem, 16vw, 4rem);
   }
 }
 
