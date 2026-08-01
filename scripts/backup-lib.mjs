@@ -217,7 +217,6 @@ function openRegularFile(file) {
   try {
     // The descriptor is opened without following links, then fstat is compared
     // with both path snapshots before any bytes are consumed.
-    // codeql[js/file-system-race]
     descriptor = openSync(
       file,
       constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),

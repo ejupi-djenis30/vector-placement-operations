@@ -1132,7 +1132,9 @@ test("backup, manifest inspection and restore form a verified session-free round
 
   const truncatedDatabaseFile = path.join(root, "database-truncated.sqlite");
   copyFileSync(backup, truncatedDatabaseFile);
-  const backupBytes = readFileSync(backup);
+  // Work from the isolated fixture copy so the test never re-opens the live
+  // backup path after the production verifier has inspected it.
+  const backupBytes = readFileSync(truncatedDatabaseFile);
   const truncatedBytes = backupBytes.subarray(
     0,
     Math.floor(backupBytes.length / 2),
