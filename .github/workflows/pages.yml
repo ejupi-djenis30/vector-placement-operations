@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pages: write
+      pages: write # Required for configure-pages to enable the repository's Pages site.
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,14 +28,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.16.0
+          node-version: 24.18.0
           package-manager-cache: false
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
       - name: Run tests and publication checks
         run: npm run check
-      - name: Install pinned Chromium runtime
-        run: npx --no-install playwright install --with-deps chromium
+      - name: Install pinned browser runtimes
+        run: npx --no-install playwright install --with-deps chromium webkit
       - name: Run browser acceptance tests
         run: npm run test:e2e
       - name: Configure GitHub Pages
@@ -54,8 +54,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      pages: write
-      id-token: write
+      pages: write # Required to publish the validated Pages artifact.
+      id-token: write # Required for the Pages deployment's OIDC identity.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

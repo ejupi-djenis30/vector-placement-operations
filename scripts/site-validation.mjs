@@ -4,6 +4,84 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function findElementById(node, id) {
+  if (
+    node?.attrs?.some((attribute) => (
+      attribute.name === "id" && attribute.value === id
+    ))
+  ) {
+    return node;
+  }
+  for (const child of node?.childNodes ?? []) {
+    const match = findElementById(child, id);
+    if (match) return match;
+  }
+  return null;
+}
+
+function textContent(node) {
+  if (node?.nodeName === "#text") return node.value;
+  return (node?.childNodes ?? []).map(textContent).join("");
+}
+
+function attribute(node, name) {
+  return node?.attrs?.find((candidate) => candidate.name === name)?.value ?? null;
+}
+
+export function normalizedElementText(html, id) {
+  const element = findElementById(parse(html), id);
+  assert(element, `HTML is missing #${id}.`);
+  return textContent(element).replace(/\s+/g, " ").trim();
+}
+
+export function assertRoleScopeClaims(html, expectedScopes) {
+  const claims = new Map();
+  visitHtml(parse(html), (node) => {
+    if (node?.nodeName !== "article") return;
+    const role = attribute(node, "data-role");
+    if (!role) return;
+    assert(!claims.has(role), `Public role claim is duplicated for ${role}.`);
+    claims.set(role, {
+      copy: textContent(node).replace(/\s+/g, " ").trim(),
+      scope: attribute(node, "data-scope"),
+    });
+  });
+
+  const expectedRoles = Object.keys(expectedScopes);
+  assert(
+    claims.size === expectedRoles.length,
+    `Public role claims must cover exactly ${expectedRoles.length} RBAC roles.`,
+  );
+  for (const role of expectedRoles) {
+    const claim = claims.get(role);
+    assert(claim, `Public role claim is missing for ${role}.`);
+    assert(
+      claim.scope === expectedScopes[role],
+      `Public role claim for ${role} must use ${expectedScopes[role]} scope.`,
+    );
+  }
+
+  const tutorCopy = claims.get("tutor")?.copy ?? "";
+  assert(
+    /\bassigned placements\b/i.test(tutorCopy) && !/\bschool-wide\b/i.test(tutorCopy),
+    "The tutor claim must describe assigned-placement scope only.",
+  );
+  const viewerCopy = claims.get("viewer")?.copy ?? "";
+  assert(
+    /\bschool-wide\b/i.test(viewerCopy)
+      && /\bread-only\b/i.test(viewerCopy)
+      && !/\bassign(?:ed|ment)\b/i.test(viewerCopy),
+    "The viewer claim must describe school-wide read-only scope without assigned scope.",
+  );
+  const administratorCopy = claims.get("school_admin")?.copy ?? "";
+  assert(
+    !/\b(?:backup|recovery|restore|infrastructure)\b/i.test(administratorCopy),
+    "The school administrator claim must not imply host-level recovery permissions.",
+  );
+
+  return Object.fromEntries(claims);
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -60,6 +138,69 @@ export function combinedOpacity(opacities) {
     );
     return transparency * (1 - opacity);
   }, 1);
+}
+
+export function assertBalancedCssBlocks(styles, label = "CSS") {
+  assert(
+    typeof styles === "string" && styles.trim().length > 0,
+    `${label} must be a non-empty stylesheet.`,
+  );
+
+  const openings = [];
+  let comment = false;
+  let escaped = false;
+  let quote = "";
+  let line = 1;
+
+  for (let index = 0; index < styles.length; index += 1) {
+    const character = styles[index];
+    const next = styles[index + 1];
+    if (character === "\n") line += 1;
+
+    if (comment) {
+      if (character === "*" && next === "/") {
+        comment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      comment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "{") {
+      openings.push(line);
+    } else if (character === "}") {
+      assert(
+        openings.length > 0,
+        `${label} has an unmatched closing block at line ${line}.`,
+      );
+      openings.pop();
+    }
+  }
+
+  assert(!comment, `${label} has an unterminated comment.`);
+  assert(!quote, `${label} has an unterminated string.`);
+  assert(
+    openings.length === 0,
+    `${label} has an unclosed block opened at line ${openings.at(-1)}.`,
+  );
+  return true;
 }
 
 export function splitCssTopLevelLayers(value) {
@@ -144,6 +285,8 @@ export function assertCssBackgroundLayers(
 export function cssSelectorDeclaration(styles, selector, property) {
   const cleanStyles = styles.replace(/\/\*[\s\S]*?\*\//g, "");
   const declarations = [];
+  // `property` is escaped as literal text and every caller uses a fixed validation contract.
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   const propertyPattern = new RegExp(
     `(?:^|;)\\s*${escapeRegExp(property)}\\s*:\\s*([^;}]+)`,
     "gi",
@@ -300,7 +443,11 @@ export function assertSecurityTxt(security, {
   );
 }
 
-export function assertExternalScriptsOnly(html, name) {
+export function assertExternalScriptsOnly(
+  html,
+  name,
+  { allowedInlineScriptTypes = [] } = {},
+) {
   const parseErrors = [];
   const document = parse(html, {
     onParseError: (error) => parseErrors.push(error),
@@ -320,10 +467,21 @@ export function assertExternalScriptsOnly(html, name) {
     }
     if (node.tagName !== "script") return;
     const source = node.attrs.find((attribute) => attribute.name === "src");
-    assert(source?.value.trim(), `${name} contains an inline script.`);
     const scriptText = (node.childNodes ?? [])
       .map((child) => child.nodeName === "#text" ? child.value : "non-text-script-content")
       .join("");
+    if (!source?.value.trim()) {
+      const type = node.attrs.find((attribute) => attribute.name === "type")?.value ?? "";
+      assert(
+        allowedInlineScriptTypes.includes(type),
+        `${name} contains an inline script.`,
+      );
+      assert(
+        !scriptText.includes("non-text-script-content"),
+        `${name} contains malformed inline script content.`,
+      );
+      return;
+    }
     assert(scriptText.trim() === "", `${name} contains script text.`);
   });
 }

@@ -1,6 +1,12 @@
 import { AppError } from "./errors.mjs";
 
 export const ROLES = Object.freeze(["school_admin", "coordinator", "tutor", "viewer"]);
+export const ROLE_DATA_SCOPES = Object.freeze({
+  school_admin: "school",
+  coordinator: "school",
+  tutor: "assigned",
+  viewer: "school",
+});
 
 const PERMISSIONS = Object.freeze({
   school_admin: new Set([
@@ -36,9 +42,16 @@ export function requirePermission(user, permission) {
   }
 }
 
+export function hasValidRoleScope(role, dataScope) {
+  return ROLE_DATA_SCOPES[role] === dataScope;
+}
+
 export function hasSchoolScope(user) {
-  return ["school_admin", "coordinator"].includes(user.role)
-    || (user.role === "viewer" && user.dataScope === "school");
+  return Boolean(
+    user
+      && ROLE_DATA_SCOPES[user.role] === "school"
+      && user.dataScope === "school",
+  );
 }
 
 export function canWritePlacement(user, placement) {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { verifyCsrf } from "../server/auth.mjs";
 import { loadConfig } from "../server/config.mjs";
 import { createCursorCodec } from "../server/cursor.mjs";
 import { hashPassword, verifyPassword } from "../server/password.mjs";
@@ -11,7 +12,37 @@ import {
   isIsoDate,
 } from "../server/validation.mjs";
 
-test("production configuration requires an origin and bounded proxy trust", () => {
+test("NODE_ENV accepts only exact supported environments", () => {
+  assert.equal(loadConfig({}).nodeEnv, "development");
+  for (const nodeEnv of ["development", "test"]) {
+    assert.equal(loadConfig({ NODE_ENV: nodeEnv }).nodeEnv, nodeEnv);
+  }
+  assert.equal(
+    loadConfig({
+      NODE_ENV: "production",
+      VECTOR_ORIGIN: "https://vector.example.test",
+    }).nodeEnv,
+    "production",
+  );
+
+  for (const nodeEnv of [
+    "",
+    "prod",
+    "Production",
+    " production",
+    "production ",
+    "TEST",
+    "staging",
+  ]) {
+    assert.throws(
+      () => loadConfig({ NODE_ENV: nodeEnv }),
+      /NODE_ENV must be exactly development, test or production/,
+      nodeEnv,
+    );
+  }
+});
+
+test("production configuration requires HTTPS, secure cookies and bounded proxy trust", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /VECTOR_ORIGIN is required/);
   assert.throws(
     () => loadConfig({
@@ -29,20 +60,30 @@ test("production configuration requires an origin and bounded proxy trust", () =
     }),
     /explicit true or false/,
   );
+  for (const origin of [
+    "http://vector.example.test",
+    "http://127.0.0.1:4173",
+    "http://localhost:4173",
+    "http://[::1]:4173",
+  ]) {
+    assert.throws(
+      () => loadConfig({
+        NODE_ENV: "production",
+        VECTOR_ORIGIN: origin,
+        VECTOR_COOKIE_SECURE: "false",
+      }),
+      /must use HTTPS in production/,
+      origin,
+    );
+  }
   assert.throws(
     () => loadConfig({
       NODE_ENV: "production",
-      VECTOR_ORIGIN: "http://vector.example.test",
+      VECTOR_ORIGIN: "https://vector.example.test",
       VECTOR_COOKIE_SECURE: "false",
     }),
-    /local loopback/,
+    /must stay enabled/,
   );
-  const loopback = loadConfig({
-    NODE_ENV: "production",
-    VECTOR_ORIGIN: "http://127.0.0.1:4173",
-    VECTOR_COOKIE_SECURE: "false",
-  });
-  assert.equal(loopback.cookieSecure, false);
   const config = loadConfig({
     NODE_ENV: "production",
     VECTOR_ORIGIN: "https://vector.example.test",
@@ -50,6 +91,54 @@ test("production configuration requires an origin and bounded proxy trust", () =
   });
   assert.equal(config.trustProxy, 1);
   assert.equal(config.cookieSecure, true);
+  const evaluation = loadConfig({
+    NODE_ENV: "test",
+    VECTOR_ORIGIN: "http://127.0.0.1:4173",
+    VECTOR_COOKIE_SECURE: "false",
+  });
+  assert.equal(evaluation.cookieSecure, false);
+});
+
+test("production bootstrap requires every institution identity explicitly", () => {
+  const bootstrap = {
+    NODE_ENV: "production",
+    VECTOR_ORIGIN: "https://vector.example.test",
+    VECTOR_BOOTSTRAP_SCHOOL_NAME: "Example training school",
+    VECTOR_BOOTSTRAP_SCHOOL_SLUG: "example-training-school",
+    VECTOR_BOOTSTRAP_TIME_ZONE: "Europe/Zurich",
+    VECTOR_BOOTSTRAP_ADMIN_EMAIL: "placement.admin@example.test",
+    VECTOR_BOOTSTRAP_ADMIN_NAME: "Placement administrator",
+    VECTOR_BOOTSTRAP_ADMIN_PASSWORD: "bootstrap-password-2026",
+  };
+  for (const name of [
+    "VECTOR_BOOTSTRAP_SCHOOL_NAME",
+    "VECTOR_BOOTSTRAP_SCHOOL_SLUG",
+    "VECTOR_BOOTSTRAP_TIME_ZONE",
+    "VECTOR_BOOTSTRAP_ADMIN_EMAIL",
+    "VECTOR_BOOTSTRAP_ADMIN_NAME",
+  ]) {
+    const incomplete = { ...bootstrap };
+    delete incomplete[name];
+    assert.throws(
+      () => loadConfig(incomplete),
+      new RegExp(`${name} is required when VECTOR_BOOTSTRAP_ADMIN_PASSWORD`),
+    );
+  }
+
+  const configured = loadConfig(bootstrap);
+  assert.equal(configured.bootstrapSchoolName, "Example training school");
+  assert.equal(configured.bootstrapSchoolSlug, "example-training-school");
+  assert.equal(configured.bootstrapTimeZone, "Europe/Zurich");
+  assert.equal(configured.bootstrapAdminEmail, "placement.admin@example.test");
+  assert.equal(configured.bootstrapAdminName, "Placement administrator");
+
+  const testDefaults = loadConfig({
+    NODE_ENV: "test",
+    VECTOR_BOOTSTRAP_ADMIN_PASSWORD: "test-only-password-2026",
+  });
+  assert.equal(testDefaults.bootstrapSchoolName, "VECTOR School");
+  assert.equal(testDefaults.bootstrapAdminEmail, "admin@example.test");
+  assert.equal(testDefaults.bootstrapTimeZone, "UTC");
 });
 
 test("session inactivity policy is bounded by the absolute lifetime", () => {
@@ -82,14 +171,67 @@ test("session inactivity policy is bounded by the absolute lifetime", () => {
   );
 });
 
-test("password verification accepts a valid scrypt hash and rejects malformed cost parameters", async () => {
+test("HTTP transport limits are finite and reject contradictory header timing", () => {
+  const defaults = loadConfig({ NODE_ENV: "test" });
+  assert.equal(defaults.requestTimeoutMs, 30_000);
+  assert.equal(defaults.headersTimeoutMs, 10_000);
+  assert.equal(defaults.keepAliveTimeoutMs, 5_000);
+  assert.equal(defaults.maxRequestsPerSocket, 1_000);
+  assert.equal(defaults.shutdownGraceMs, 10_000);
+
+  assert.throws(
+    () => loadConfig({
+      NODE_ENV: "test",
+      VECTOR_REQUEST_TIMEOUT_MS: "5000",
+      VECTOR_HEADERS_TIMEOUT_MS: "6000",
+    }),
+    /HEADERS_TIMEOUT_MS must be less than or equal/,
+  );
+  assert.throws(
+    () => loadConfig({ NODE_ENV: "test", VECTOR_MAX_REQUESTS_PER_SOCKET: "0" }),
+    /integer between 1 and 10000/,
+  );
+});
+
+test("password verification accepts canonical scrypt hashes and rejects malformed encodings", async () => {
   const hash = await hashPassword("a-strong-test-password-2026");
   assert.equal(await verifyPassword("a-strong-test-password-2026", hash), true);
   assert.equal(await verifyPassword("wrong-password", hash), false);
-  assert.equal(
-    await verifyPassword("a-strong-test-password-2026", hash.replace("$16384$", "$1048576$")),
-    false,
-  );
+  for (const malformed of [
+    hash.replace("$16384$", "$1048576$"),
+    hash.replace("$16384$", "$016384$"),
+    `${hash}$ignored-field`,
+    `${hash.slice(0, hash.lastIndexOf("$") + 1)}${"a".repeat(257)}`,
+    hash.replace(/([^$]+)$/, "$1!"),
+    hash.replace(/([^$]+)(\$[^$]+)$/, "$1!$2"),
+  ]) {
+    assert.equal(
+      await verifyPassword("a-strong-test-password-2026", malformed),
+      false,
+    );
+  }
+});
+
+test("CSRF verification uses exact tokens and safely rejects different lengths", () => {
+  const csrfToken = "0123456789abcdef0123456789abcdef";
+  assert.doesNotThrow(() => verifyCsrf({
+    headers: { "x-csrf-token": csrfToken },
+    session: { csrfToken },
+  }));
+  for (const provided of [
+    "1123456789abcdef0123456789abcdef",
+    "short",
+    `${csrfToken}extra`,
+    undefined,
+  ]) {
+    assert.throws(
+      () => verifyCsrf({
+        headers: { "x-csrf-token": provided },
+        session: { csrfToken },
+      }),
+      (error) => error.statusCode === 403 && error.code === "invalid_csrf",
+    );
+  }
 });
 
 test("branding enforces contrast and PNG structure, dimensions and CRC integrity", () => {

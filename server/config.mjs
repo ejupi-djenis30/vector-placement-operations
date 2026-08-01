@@ -3,6 +3,15 @@ import { assertIanaTimeZone } from "./school-time.mjs";
 
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
 const BOOLEAN_FALSE = new Set(["0", "false", "no", "off"]);
+const NODE_ENVIRONMENTS = new Set(["development", "test", "production"]);
+
+function nodeEnvironmentFrom(value) {
+  const nodeEnv = value ?? "development";
+  if (typeof nodeEnv !== "string" || !NODE_ENVIRONMENTS.has(nodeEnv)) {
+    throw new Error("NODE_ENV must be exactly development, test or production.");
+  }
+  return nodeEnv;
+}
 
 function booleanFrom(value, fallback, name) {
   if (value === undefined) return fallback;
@@ -76,8 +85,18 @@ function logLevelFrom(value, production) {
   return level;
 }
 
+function bootstrapValue(env, name, required) {
+  const value = env[name];
+  if (required && (value === undefined || !String(value).trim())) {
+    throw new Error(
+      `${name} is required when VECTOR_BOOTSTRAP_ADMIN_PASSWORD is set in production.`,
+    );
+  }
+  return value;
+}
+
 export function loadConfig(env = process.env, cwd = process.cwd()) {
-  const nodeEnv = env.NODE_ENV ?? "development";
+  const nodeEnv = nodeEnvironmentFrom(env.NODE_ENV);
   const production = nodeEnv === "production";
   const databasePath = stringFrom(
     env.VECTOR_DB_PATH,
@@ -86,17 +105,11 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
   );
   const origin = originFrom(env.VECTOR_ORIGIN, production);
   const cookieSecure = booleanFrom(env.VECTOR_COOKIE_SECURE, production, "VECTOR_COOKIE_SECURE");
-  if (production && origin.startsWith("https://") && !cookieSecure) {
-    throw new Error("VECTOR_COOKIE_SECURE must stay enabled for an HTTPS production origin.");
+  if (production && !origin.startsWith("https://")) {
+    throw new Error("VECTOR_ORIGIN must use HTTPS in production, including loopback deployments.");
   }
-  if (production && origin.startsWith("http://")) {
-    const hostname = new URL(origin).hostname;
-    if (!["127.0.0.1", "localhost", "[::1]"].includes(hostname)) {
-      throw new Error("A production HTTP origin is allowed only on the local loopback interface.");
-    }
-    if (cookieSecure) {
-      throw new Error("VECTOR_COOKIE_SECURE must be false for a loopback HTTP origin.");
-    }
+  if (production && !cookieSecure) {
+    throw new Error("VECTOR_COOKIE_SECURE must stay enabled for an HTTPS production origin.");
   }
 
   const sessionHours = integerFrom(env.VECTOR_SESSION_HOURS, 12, {
@@ -115,6 +128,25 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
       + "VECTOR_SESSION_HOURS converted to minutes.",
     );
   }
+  const requestTimeoutMs = integerFrom(env.VECTOR_REQUEST_TIMEOUT_MS, 30_000, {
+    min: 1_000,
+    max: 120_000,
+    name: "VECTOR_REQUEST_TIMEOUT_MS",
+  });
+  const headersTimeoutMs = integerFrom(env.VECTOR_HEADERS_TIMEOUT_MS, 10_000, {
+    min: 1_000,
+    max: 60_000,
+    name: "VECTOR_HEADERS_TIMEOUT_MS",
+  });
+  if (headersTimeoutMs > requestTimeoutMs) {
+    throw new Error(
+      "VECTOR_HEADERS_TIMEOUT_MS must be less than or equal to VECTOR_REQUEST_TIMEOUT_MS.",
+    );
+  }
+  const bootstrapAdminPassword = env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD ?? null;
+  const explicitProductionBootstrap = production
+    && typeof bootstrapAdminPassword === "string"
+    && bootstrapAdminPassword.length > 0;
 
   return Object.freeze({
     nodeEnv,
@@ -138,34 +170,71 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
       max: 2_097_152,
       name: "VECTOR_BODY_LIMIT",
     }),
+    requestTimeoutMs,
+    headersTimeoutMs,
+    keepAliveTimeoutMs: integerFrom(env.VECTOR_KEEP_ALIVE_TIMEOUT_MS, 5_000, {
+      min: 1_000,
+      max: 60_000,
+      name: "VECTOR_KEEP_ALIVE_TIMEOUT_MS",
+    }),
+    maxRequestsPerSocket: integerFrom(env.VECTOR_MAX_REQUESTS_PER_SOCKET, 1_000, {
+      min: 1,
+      max: 10_000,
+      name: "VECTOR_MAX_REQUESTS_PER_SOCKET",
+    }),
+    shutdownGraceMs: integerFrom(env.VECTOR_SHUTDOWN_GRACE_MS, 10_000, {
+      min: 1_000,
+      max: 60_000,
+      name: "VECTOR_SHUTDOWN_GRACE_MS",
+    }),
     sessionHours,
     sessionIdleMinutes,
-    bootstrapSchoolName: stringFrom(env.VECTOR_BOOTSTRAP_SCHOOL_NAME, "VECTOR School", {
-      name: "VECTOR_BOOTSTRAP_SCHOOL_NAME",
-      max: 120,
-    }),
-    bootstrapSchoolSlug: stringFrom(env.VECTOR_BOOTSTRAP_SCHOOL_SLUG, "vector-school", {
-      name: "VECTOR_BOOTSTRAP_SCHOOL_SLUG",
-      max: 80,
-      pattern: /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
-    }),
+    bootstrapSchoolName: stringFrom(
+      bootstrapValue(env, "VECTOR_BOOTSTRAP_SCHOOL_NAME", explicitProductionBootstrap),
+      "VECTOR School",
+      {
+        name: "VECTOR_BOOTSTRAP_SCHOOL_NAME",
+        max: 120,
+      },
+    ),
+    bootstrapSchoolSlug: stringFrom(
+      bootstrapValue(env, "VECTOR_BOOTSTRAP_SCHOOL_SLUG", explicitProductionBootstrap),
+      "vector-school",
+      {
+        name: "VECTOR_BOOTSTRAP_SCHOOL_SLUG",
+        max: 80,
+        pattern: /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+      },
+    ),
     bootstrapTimeZone: assertIanaTimeZone(
-      stringFrom(env.VECTOR_BOOTSTRAP_TIME_ZONE, "UTC", {
-        name: "VECTOR_BOOTSTRAP_TIME_ZONE",
-        max: 100,
-      }),
+      stringFrom(
+        bootstrapValue(env, "VECTOR_BOOTSTRAP_TIME_ZONE", explicitProductionBootstrap),
+        "UTC",
+        {
+          name: "VECTOR_BOOTSTRAP_TIME_ZONE",
+          max: 100,
+        },
+      ),
       "VECTOR_BOOTSTRAP_TIME_ZONE",
     ),
-    bootstrapAdminEmail: stringFrom(env.VECTOR_BOOTSTRAP_ADMIN_EMAIL, "admin@example.test", {
-      name: "VECTOR_BOOTSTRAP_ADMIN_EMAIL",
-      max: 254,
-      pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-    }).toLowerCase(),
-    bootstrapAdminName: stringFrom(env.VECTOR_BOOTSTRAP_ADMIN_NAME, "School administrator", {
-      name: "VECTOR_BOOTSTRAP_ADMIN_NAME",
-      max: 120,
-    }),
-    bootstrapAdminPassword: env.VECTOR_BOOTSTRAP_ADMIN_PASSWORD ?? null,
+    bootstrapAdminEmail: stringFrom(
+      bootstrapValue(env, "VECTOR_BOOTSTRAP_ADMIN_EMAIL", explicitProductionBootstrap),
+      "admin@example.test",
+      {
+        name: "VECTOR_BOOTSTRAP_ADMIN_EMAIL",
+        max: 254,
+        pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+      },
+    ).toLowerCase(),
+    bootstrapAdminName: stringFrom(
+      bootstrapValue(env, "VECTOR_BOOTSTRAP_ADMIN_NAME", explicitProductionBootstrap),
+      "School administrator",
+      {
+        name: "VECTOR_BOOTSTRAP_ADMIN_NAME",
+        max: 120,
+      },
+    ),
+    bootstrapAdminPassword,
     seedSynthetic: booleanFrom(
       env.VECTOR_SEED_SYNTHETIC,
       !production,

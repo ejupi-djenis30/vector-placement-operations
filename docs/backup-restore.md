@@ -23,25 +23,60 @@ application-consistent SQLite snapshot.
 Choose a unique output filename on the persistent volume:
 
 ```sh
-docker compose exec vector npm run db:backup -- \
+docker compose exec vector node scripts/backup.mjs \
   --output /var/lib/vector/vector-backup-YYYYMMDD-HHMMSS.sqlite
 ```
 
 Inspect it before copying it elsewhere:
 
 ```sh
-docker compose exec vector npm run db:inspect-backup -- \
+docker compose exec vector node scripts/inspect-backup.mjs \
   --file /var/lib/vector/vector-backup-YYYYMMDD-HHMMSS.sqlite
 ```
 
-The inspection command checks the SQLite structure and reports backup metadata without printing
-record content. A successful process exit is required before the file is accepted as a backup.
+The inspection command runs SQLite's full, index-aware integrity check, verifies foreign keys, the
+exact migration history and the migration-owned tables, indexes and triggers, and reports backup
+metadata without printing record content. This schema comparison prevents a replaced snapshot and
+freshly recomputed sidecar from hiding a removed safety trigger or an added executable schema
+object. Startup and readiness apply the same migration/schema identity check to the live database.
+A successful process exit is required before the file is accepted as a backup.
+`VECTOR_BACKUP_MAX_BYTES` sets a shared byte ceiling for backup creation, inspection and restore.
+The default and maximum is 10 GiB; choose a lower reviewed value above the largest expected
+database. Inspection and restore reject an oversized input before hashing it or opening it with
+SQLite.
 
 The backup command creates two files: the SQLite snapshot and a
 `vector-backup-YYYYMMDD-HHMMSS.sqlite.manifest.json` sidecar containing its checksum and inspection
 metadata, including the VECTOR application version, migration identity and table counts. Keep,
 transfer and retain them as one backup set. Inspection and restore fail when the manifest is
-missing, belongs to a different supported build or does not match the snapshot.
+missing, belongs to a different supported build or does not match the snapshot. A published backup
+is a self-contained SQLite file: inspection and restore reject an adjacent `-wal`, `-shm` or
+`-journal` companion instead of letting unmanifested SQLite state influence verification. They also
+verify the SQLite header is the canonical rollback-journal snapshot produced by the backup command,
+rather than opening a WAL-mode main file that could depend on or create unmanifested companions.
+
+VECTOR synchronizes each published file and its parent directory on POSIX systems, but a filesystem
+cannot publish the snapshot and manifest as one transaction. A host crash between those two
+publications can therefore leave a snapshot without its manifest; treat it as an incomplete orphan,
+never reconstruct a manifest by hand. Preserve it only if incident analysis requires it, otherwise
+remove it under the approved procedure and rerun the backup with a new unique filename. Apply the
+same rule to a manifest without its snapshot. The commands never overwrite either member of an
+existing pair.
+
+The command builds and sanitizes a temporary snapshot before publishing the pair. Allow enough free
+space for the live database, its WAL, the temporary snapshot and `VACUUM` working space. If final
+temporary-file cleanup fails after a restore or manifest was linked into place, VECTOR attempts to
+remove the exact target it just published and exits non-zero. Treat any such result as a failed job,
+inspect the private directory for an orphan and never continue from an uninspected file.
+The selected snapshot and manifest names must also stay distinct from the live database and its
+reserved `-wal`, `-shm` and `-journal` companion paths; the backup command rejects any overlap even
+when the relevant companion does not currently exist.
+
+Backup, inspection and restore reject symbolic-link/junction components, hard-linked or non-regular
+SQLite files and unsafe main-database companions. Use the canonical private directory and the
+single-link file itself rather than an alias. Live backup inspection and snapshot creation remain
+bound to the same guarded SQLite connection. On Windows the commands also reject device namespaces,
+reserved DOS device names, trailing-dot or trailing-space aliases and NTFS alternate data streams.
 
 The checksum detects accidental corruption or an incomplete backup set. It does not prove
 authenticity against an attacker who can replace both the snapshot and its manifest. Protect the
@@ -62,7 +97,7 @@ docker compose cp \
 chmod 0600 /srv/vector-backups/staging/vector-backup-YYYYMMDD-HHMMSS.sqlite*
 docker compose run --rm --no-deps \
   --volume /srv/vector-backups/staging:/restore-source:ro \
-  vector npm run db:inspect-backup -- \
+  vector node scripts/inspect-backup.mjs \
   --file /restore-source/vector-backup-YYYYMMDD-HHMMSS.sqlite
 ```
 
@@ -84,13 +119,15 @@ docker compose cp `
 $vectorBackupMount = (Resolve-Path $vectorBackupDir).Path
 docker compose run --rm --no-deps `
   --volume "${vectorBackupMount}:/restore-source:ro" `
-  vector npm run db:inspect-backup -- `
+  vector node scripts/inspect-backup.mjs `
   --file /restore-source/vector-backup-YYYYMMDD-HHMMSS.sqlite
 ```
 
 Restrict the final backup destination as well as the staging directory. POSIX directories should be
 mode `0700` and backup files mode `0600`; on Windows, remove inherited ACLs and grant access only to
-the backup service identity and approved recovery operators.
+the backup service identity and approved recovery operators. VECTOR also rejects a POSIX backup
+destination below an ancestor owned by another non-root identity or writable by other users without
+the sticky bit, because that ancestor could replace an otherwise private output directory.
 
 Two `docker compose cp` calls are not an atomic transfer. Treat the snapshot and manifest as
 incomplete until both arrive and the post-transfer inspection succeeds. Then move the verified pair
@@ -136,7 +173,7 @@ the restored installation has been verified.
    ```sh
    docker compose -p vector-recovery-YYYYMMDD run --rm --no-deps \
      --volume /srv/vector-backups/staging:/restore-source:ro \
-     vector npm run db:restore -- \
+     vector node scripts/restore.mjs \
      --file /restore-source/vector-backup-YYYYMMDD-HHMMSS.sqlite \
      --confirm-empty
    ```
@@ -146,7 +183,7 @@ the restored installation has been verified.
    ```powershell
    docker compose -p vector-recovery-YYYYMMDD run --rm --no-deps `
      --volume "${vectorBackupMount}:/restore-source:ro" `
-     vector npm run db:restore -- `
+     vector node scripts/restore.mjs `
      --file /restore-source/vector-backup-YYYYMMDD-HHMMSS.sqlite `
      --confirm-empty
    ```
@@ -160,7 +197,7 @@ the restored installation has been verified.
 7. Wait for `/api/health/ready` and run:
 
    ```sh
-   docker compose -p vector-recovery-YYYYMMDD exec vector npm run doctor
+   docker compose -p vector-recovery-YYYYMMDD exec vector node scripts/doctor.mjs
    ```
 
 8. Sign in with a named administrator and verify representative records, expected audit history,
@@ -177,6 +214,11 @@ empty, stop and resolve the unexpected state before retrying. Restore refuses to
 target database or its `-wal`, `-shm` or `-journal` companion exists. After the atomic copy, it
 verifies the destination against the manifest before reporting success.
 
+A truncated manifest, a structurally corrupt snapshot or any post-copy verification failure exits
+non-zero. Restore removes only the destination file it created and never overwrites pre-existing
+target state. Preserve the rejected pair for incident analysis, choose a different empty recovery
+volume and inspect the next candidate before retrying.
+
 ## Reclaim deleted space
 
 Ordinary deletion does not guarantee immediate physical removal from SQLite pages, WAL, backups,
@@ -190,15 +232,18 @@ volume:
 ```sh
 docker compose stop vector
 docker compose run --rm --no-deps vector \
-  npm run db:compact -- --confirm-maintenance
+  node scripts/compact.mjs --confirm-maintenance
 docker compose start vector
-docker compose exec vector npm run doctor
+docker compose exec vector node scripts/doctor.mjs
 ```
 
 The confirmation flag states that an inspected backup exists and downtime has been approved. The
 command refuses a busy database, enables `secure_delete`, truncates WAL, runs `VACUUM` and checks the
-final checkpoint. It does not reach historical backups, exported files, host snapshots or
-storage-controller remanence.
+final checkpoint. Compaction and doctor use the same existing-file guard as the server, rejecting
+symbolic-link/junction, hard-link, non-regular and unsafe companion aliases before maintenance or a
+writability probe begins. Compaction binds integrity inspection and mutation to that one connection.
+It does not reach historical backups, exported files, host snapshots or storage-controller
+remanence.
 
 ## Disaster recovery
 
@@ -208,7 +253,7 @@ configuration store, not from a backup of an administrator's shell history.
 
 Recovery is complete only when:
 
-- readiness and `npm run doctor` pass;
+- readiness and `node scripts/doctor.mjs` pass;
 - an authorized operator can sign in;
 - representative records and audit events are present;
 - the external HTTPS origin works with secure cookies; and

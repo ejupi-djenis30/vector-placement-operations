@@ -20,37 +20,42 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "dev": "node --env-file-if-exists=.env --watch server/index.mjs",
-    "test": "node --test",
-    "test:e2e": "playwright test",
-    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.mjs",
-    "db:backup": "node --env-file-if-exists=.env scripts/backup.mjs",
-    "db:inspect-backup": "node --env-file-if-exists=.env scripts/inspect-backup.mjs",
-    "db:restore": "node --env-file-if-exists=.env scripts/restore.mjs",
-    "db:compact": "node --env-file-if-exists=.env scripts/compact.mjs",
-    "admin:create": "node --env-file-if-exists=.env scripts/create-admin.mjs",
-    "doctor": "node --env-file-if-exists=.env scripts/doctor.mjs",
-    "check:audit": "npm audit --omit=dev --audit-level=high",
-    "check:site": "node scripts/validate-site.mjs",
-    "check:release": "node scripts/release-cli.mjs metadata",
-    "release:tag-preflight": "node scripts/release-cli.mjs tag-preflight",
-    "release:tag-verify": "node scripts/release-cli.mjs tag-verify",
-    "release:build": "node scripts/release-cli.mjs build --output release",
-    "release:verify": "node scripts/release-cli.mjs verify --directory release",
-    "check": "npm test && npm run check:site && npm run check:release && npm run check:audit"
+    "test": "node scripts/runtime-preflight.mjs && node --expose-gc --test",
+    "test:coverage": "node scripts/runtime-preflight.mjs && node --expose-gc --experimental-test-coverage --test-coverage-include=\"server/**/*.mjs\" --test-coverage-include=\"scripts/**/*.mjs\" --test-coverage-include=\"site/app/**/*.mjs\" --test-coverage-exclude=\"test-support/**\" --test-coverage-exclude=\"**/.tmp-*.mjs\" --test-coverage-lines=85 --test-coverage-branches=75 --test-coverage-functions=85 --test",
+    "test:e2e": "node scripts/runtime-preflight.mjs && playwright test",
+    "test:e2e:webkit": "node scripts/runtime-preflight.mjs && playwright test --project=presentation-webkit-smoke --project=workspace-webkit-smoke",
+    "audit:scale": "node scripts/runtime-preflight.mjs && node --expose-gc scripts/scale-audit.mjs",
+    "db:migrate": "node scripts/runtime-preflight.mjs && node --env-file-if-exists=.env scripts/migrate.mjs",
+    "db:backup": "node scripts/runtime-preflight.mjs && node --env-file-if-exists=.env scripts/backup.mjs",
+    "db:inspect-backup": "node scripts/runtime-preflight.mjs && node --env-file-if-exists=.env scripts/inspect-backup.mjs",
+    "db:restore": "node scripts/runtime-preflight.mjs && node --env-file-if-exists=.env scripts/restore.mjs",
+    "db:compact": "node scripts/runtime-preflight.mjs && node --env-file-if-exists=.env scripts/compact.mjs",
+    "admin:create": "node scripts/runtime-preflight.mjs && node --env-file-if-exists=.env scripts/create-admin.mjs",
+    "doctor": "node scripts/runtime-preflight.mjs && node --env-file-if-exists=.env scripts/doctor.mjs",
+    "check:audit": "node scripts/runtime-preflight.mjs && npm audit --omit=dev --audit-level=high",
+    "check:site": "node scripts/runtime-preflight.mjs && node scripts/validate-site.mjs",
+    "check:release": "node scripts/runtime-preflight.mjs && node scripts/release-cli.mjs metadata",
+    "release:tag-preflight": "node scripts/runtime-preflight.mjs && node scripts/release-cli.mjs tag-preflight",
+    "release:tag-verify": "node scripts/runtime-preflight.mjs && node scripts/release-cli.mjs tag-verify",
+    "release:build": "node scripts/runtime-preflight.mjs && node scripts/release-cli.mjs build --output release",
+    "release:verify": "node scripts/runtime-preflight.mjs && node scripts/release-cli.mjs verify --directory release",
+    "check": "node scripts/runtime-preflight.mjs && npm test && npm run check:site && npm run check:release && npm run check:audit"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.62.0",
     "parse5": "8.0.1"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.23.1 <23 || >=24.18.0 <25"
   },
   "dependencies": {
-    "better-sqlite3": "13.0.1",
+    "better-sqlite3": "13.0.2",
+    "compression": "1.8.1",
     "cookie-parser": "1.4.7",
     "csv-parse": "7.0.1",
     "express": "5.2.1",
-    "express-rate-limit": "8.6.0",
+    "express-rate-limit": "8.6.1",
     "helmet": "8.3.0",
     "zod": "4.4.3"
   }

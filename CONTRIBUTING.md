@@ -16,24 +16,33 @@ Report vulnerabilities through [SECURITY.md](SECURITY.md), not a public issue.
 
 ## Local setup
 
-Install Node.js 22 or newer, then run:
+Install Node.js 22.23.1 or newer within the Node 22 line, or Node.js 24.18.0 or newer within the
+Node 24 line, then run:
 
 ```bash
 npm ci
 npm test
+npm run test:coverage
 npm run check:site
 npm run check:audit
 ```
 
-Install Chromium before running browser acceptance tests:
+Install Chromium and WebKit before running browser acceptance tests:
 
 ```bash
-npx --no-install playwright install chromium
+npx --no-install playwright install chromium webkit
 npm run test:e2e
 ```
 
 Use an isolated database and a unique test-only bootstrap password. Do not point a development
 process or test at an operational VECTOR volume.
+
+`npm run test:coverage` uses Node's experimental native coverage mode as a separate gate and
+requires at least 85% lines, 75% branches and 85% functions across loaded server, operator-script
+and browser-application modules. `npm run audit:scale` builds a fixed, fictional large-school
+fixture in a temporary database, reports query plans, response sizes, concurrency, import statement
+counts and memory observations, then deletes that database. Treat timings as local diagnostics,
+not portable performance thresholds.
 
 ## What a good change includes
 

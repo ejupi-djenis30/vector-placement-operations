@@ -1,6 +1,10 @@
 import { defineConfig } from "@playwright/test";
+import { resolveE2ePorts } from "./scripts/e2e-ports.mjs";
 
 const isCI = Boolean(process.env.CI);
+const { presentation: presentationPort, workspace: workspacePort } = resolveE2ePorts();
+const presentationBaseUrl = `http://127.0.0.1:${presentationPort}/vector-placement-operations/`;
+const workspaceBaseUrl = `http://127.0.0.1:${workspacePort}`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -24,20 +28,32 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "workspace",
-      testMatch: "workspace.spec.mjs",
-      use: { browserName: "chromium", baseURL: "http://127.0.0.1:4173" },
-    },
-    {
       name: "presentation",
       testMatch: "presentation.spec.mjs",
-      use: { browserName: "chromium", baseURL: "http://127.0.0.1:4174/vector-placement-operations/" },
+      use: { browserName: "chromium", baseURL: presentationBaseUrl },
+    },
+    {
+      name: "workspace",
+      testMatch: "workspace.spec.mjs",
+      use: { browserName: "chromium", baseURL: workspaceBaseUrl },
+    },
+    {
+      name: "presentation-webkit-smoke",
+      testMatch: "presentation.spec.mjs",
+      grep: /loads as an honest public presentation|remains inside the viewport without an API-backed workspace/,
+      use: { browserName: "webkit", baseURL: presentationBaseUrl },
+    },
+    {
+      name: "workspace-webkit-smoke",
+      testMatch: "workspace.spec.mjs",
+      grep: /shows structured CSV validation errors|paginates, filters and exports a bounded audit trail|keeps every authenticated role accessible/,
+      use: { browserName: "webkit", baseURL: workspaceBaseUrl },
     },
   ],
   webServer: [
     {
       command: "node scripts/serve-e2e.mjs",
-      url: "http://127.0.0.1:4173/api/health/ready",
+      url: `${workspaceBaseUrl}/api/health/ready`,
       timeout: 15_000,
       reuseExistingServer: false,
       stdout: "pipe",
@@ -45,7 +61,7 @@ export default defineConfig({
     },
     {
       command: "node scripts/serve-site.mjs",
-      url: "http://127.0.0.1:4174/vector-placement-operations/",
+      url: presentationBaseUrl,
       timeout: 10_000,
       reuseExistingServer: false,
       stdout: "pipe",

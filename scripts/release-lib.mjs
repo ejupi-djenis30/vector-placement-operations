@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { constants } from "node:fs";
+import { constants, lstatSync } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -14,7 +14,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repositoryRoot = resolve(fileURLToPath(new URL("../", import.meta.url)));
@@ -118,6 +126,8 @@ async function readRegularFile(path, description) {
 
 function changelogSection(changelog, version) {
   const escaped = version.replaceAll(".", "\\.");
+  // `version` is constrained by stableVersionPattern before this internal parser is called.
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
   const match = changelog.match(new RegExp(
     `^## ${escaped} — (\\d{4}-\\d{2}-\\d{2})\\r?\\n\\r?\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))`,
     "m",
@@ -191,7 +201,15 @@ export async function validateReleaseMetadata({ tag } = {}) {
   assert.equal(packageLock.packages?.[""]?.license, "MIT", "package-lock.json must declare the MIT license.");
   assert.match(license, /^MIT License\r?\n/, "LICENSE is not the canonical MIT license text.");
   assert.match(license, /Copyright \(c\) 2026 Ejupi Labs and project contributors/, "LICENSE must keep collective attribution.");
-  assert.match(changelog, /^## Unreleased\r?\n\r?\n- No unreleased changes\./m, "A release candidate must not carry unreleased changes.");
+  const unreleased = changelog.match(
+    /^## Unreleased\r?\n\r?\n([\s\S]*?)(?=^## )/m,
+  );
+  assert.ok(unreleased, "CHANGELOG.md is missing its Unreleased section.");
+  assert.match(
+    unreleased[1],
+    /^- /m,
+    "CHANGELOG.md Unreleased must contain a bullet or the explicit no-change marker.",
+  );
 
   const section = changelogSection(changelog, version);
   if (tag !== undefined && tag !== "") {
@@ -410,6 +428,10 @@ const releaseFileInputs = Object.freeze([
   "e2e/workspace.spec.mjs",
   "migrations/001_initial.sql",
   "migrations/002_programme_policies.sql",
+  "migrations/003_collection_sort_indexes.sql",
+  "migrations/004_placement_activity_capacity.sql",
+  "migrations/005_active_session_capacity.sql",
+  "migrations/006_user_capacity.sql",
   "package-lock.json",
   "package.json",
   "playwright.config.mjs",
@@ -420,12 +442,15 @@ const releaseFileInputs = Object.freeze([
   "scripts/compact.mjs",
   "scripts/create-admin.mjs",
   "scripts/doctor.mjs",
+  "scripts/e2e-ports.mjs",
   "scripts/inspect-backup.mjs",
   "scripts/migrate.mjs",
   "scripts/publish-release.mjs",
   "scripts/release-cli.mjs",
   "scripts/release-lib.mjs",
   "scripts/restore.mjs",
+  "scripts/runtime-preflight.mjs",
+  "scripts/scale-audit.mjs",
   "scripts/serve-e2e.mjs",
   "scripts/serve-site.mjs",
   "scripts/site-validation.mjs",
@@ -439,8 +464,10 @@ const releaseFileInputs = Object.freeze([
   "server/data.mjs",
   "server/db.mjs",
   "server/errors.mjs",
+  "server/http.mjs",
   "server/index.mjs",
   "server/password.mjs",
+  "server/placement-activity-limits.mjs",
   "server/portability.mjs",
   "server/programmes.mjs",
   "server/rbac.mjs",
@@ -448,12 +475,17 @@ const releaseFileInputs = Object.freeze([
   "server/schemas.mjs",
   "server/school-time.mjs",
   "server/static.mjs",
+  "server/user-limits.mjs",
   "server/users.mjs",
   "server/validation.mjs",
   "server/version.mjs",
   "site/api/public/branding.css",
-  "site/app.mjs",
+  "site/app/api-client.mjs",
+  "site/app/core.mjs",
   "site/app/index.html",
+  "site/app/workspace-domain.mjs",
+  "site/app/workspace-programmes.mjs",
+  "site/app/workspace-ui.mjs",
   "site/app/workspace.mjs",
   "site/assets/social-preview.png",
   "site/assets/social-preview.svg",
@@ -463,22 +495,32 @@ const releaseFileInputs = Object.freeze([
   "site/index.html",
   "site/robots.txt",
   "site/sitemap.xml",
-  "site/styles.css",
+  "site/styles/marketing.css",
+  "site/styles/shared.css",
+  "site/styles/workspace.css",
   "test-support/server-test-helper.mjs",
   "test/attention.integration.test.mjs",
   "test/auth-races.integration.test.mjs",
+  "test/client-core.test.mjs",
   "test/clean-install.integration.test.mjs",
   "test/coverage.integration.test.mjs",
+  "test/http-config.test.mjs",
   "test/lifecycle-integrity.integration.test.mjs",
   "test/operations.integration.test.mjs",
+  "test/placement-activity-capacity.integration.test.mjs",
   "test/programme-policies.integration.test.mjs",
+  "test/repository-config.test.mjs",
   "test/release-contract.test.mjs",
   "test/release-publisher.test.mjs",
   "test/release-workflow-contract.test.mjs",
+  "test/scale-operations.integration.test.mjs",
   "test/school-time.test.mjs",
   "test/site-validation.test.mjs",
   "test/security-boundaries.test.mjs",
   "test/server.integration.test.mjs",
+  "test/user-capacity.integration.test.mjs",
+  "test/workspace-domain.test.mjs",
+  "test/workspace-ui.test.mjs",
 ]);
 
 async function collectReleaseFiles() {
@@ -1055,6 +1097,8 @@ async function extractTarGzipArchive(archive, destination, version) {
 }
 
 function runAcceptanceProcess(command, arguments_, options) {
+  // Callers supply only process.execPath or the locally resolved npm executable, with argv arrays.
+  // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process
   const result = spawnSync(command, arguments_, {
     ...options,
     encoding: "utf8",
@@ -1093,6 +1137,60 @@ function runExpectedAcceptanceFailure(
   );
 }
 
+function bindAcceptanceRuntime(environment) {
+  const result = { ...environment };
+  const inheritedPath = Object.entries(result)
+    .find(([name]) => name.toUpperCase() === "PATH")?.[1];
+  for (const name of Object.keys(result)) {
+    if (name.toUpperCase() === "PATH") delete result[name];
+  }
+  result.PATH = [dirname(process.execPath), inheritedPath]
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .join(delimiter);
+  return result;
+}
+
+function acceptanceNpmInvocation(environment = process.env) {
+  if (process.platform !== "win32") {
+    return { command: "npm", arguments: [] };
+  }
+
+  const pathValue = Object.entries(environment)
+    .find(([name]) => name.toUpperCase() === "PATH")?.[1];
+  const candidates = [
+    resolve(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+    typeof environment.npm_execpath === "string"
+      ? resolve(environment.npm_execpath)
+      : null,
+    ...(typeof pathValue === "string"
+      ? pathValue.split(delimiter).map((entry) => (
+        entry.trim()
+          ? resolve(
+            entry.trim().replace(/^"|"$/g, ""),
+            "node_modules",
+            "npm",
+            "bin",
+            "npm-cli.js",
+          )
+          : null
+      ))
+      : []),
+  ];
+  const npmCli = candidates.find((candidate) => {
+    if (!candidate || basename(candidate).toLowerCase() !== "npm-cli.js") return false;
+    try {
+      return lstatSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  });
+  assert.ok(
+    npmCli,
+    "A local npm CLI is required to validate the extracted release artifact.",
+  );
+  return { command: process.execPath, arguments: [npmCli] };
+}
+
 export async function acceptReleaseCandidate({ directory, sourceCommit, tag } = {}) {
   const verified = await verifyReleaseCandidate({ directory, sourceCommit, tag });
   const temporary = await mkdtemp(join(tmpdir(), "vector-release-acceptance-"));
@@ -1102,30 +1200,27 @@ export async function acceptReleaseCandidate({ directory, sourceCommit, tag } = 
       `vector-self-hosted-${verified.version}.tar.gz`,
     );
     const root = await extractTarGzipArchive(archive, temporary, verified.version);
-    const npm = process.platform === "win32" ? process.execPath : "npm";
-    const npmArguments = process.platform === "win32"
-      ? [resolve(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")]
-      : [];
-    const environment = {
+    const npm = acceptanceNpmInvocation();
+    const environment = bindAcceptanceRuntime({
       ...process.env,
       VECTOR_RELEASE_ACCEPTANCE_CHILD: "1",
-    };
+    });
     delete environment.VECTOR_BOOTSTRAP_ADMIN_PASSWORD;
-    runAcceptanceCommand(npm, [...npmArguments, "ci", "--no-audit", "--no-fund"], {
+    runAcceptanceCommand(npm.command, [...npm.arguments, "ci", "--no-audit", "--no-fund"], {
       cwd: root,
       env: environment,
     });
-    runAcceptanceCommand(npm, [...npmArguments, "test"], { cwd: root, env: environment });
-    runAcceptanceCommand(npm, [...npmArguments, "run", "check:site"], { cwd: root, env: environment });
-    runAcceptanceCommand(npm, [...npmArguments, "run", "check:release"], { cwd: root, env: environment });
+    runAcceptanceCommand(npm.command, [...npm.arguments, "test"], { cwd: root, env: environment });
+    runAcceptanceCommand(npm.command, [...npm.arguments, "run", "check:site"], { cwd: root, env: environment });
+    runAcceptanceCommand(npm.command, [...npm.arguments, "run", "check:release"], { cwd: root, env: environment });
 
     const databasePath = resolve(root, "acceptance-data", "vector.sqlite");
     const runtimeEnvironment = {
       ...environment,
       NODE_ENV: "production",
       VECTOR_DB_PATH: databasePath,
-      VECTOR_ORIGIN: "http://127.0.0.1:4173",
-      VECTOR_COOKIE_SECURE: "false",
+      VECTOR_ORIGIN: "https://vector.release-acceptance.example.test",
+      VECTOR_COOKIE_SECURE: "true",
       VECTOR_TRUST_PROXY: "false",
       VECTOR_BOOTSTRAP_TIME_ZONE: "Europe/Zurich",
       VECTOR_SEED_SYNTHETIC: "false",
@@ -1133,6 +1228,10 @@ export async function acceptReleaseCandidate({ directory, sourceCommit, tag } = 
     };
     const bootstrapEnvironment = {
       ...runtimeEnvironment,
+      VECTOR_BOOTSTRAP_SCHOOL_NAME: "Release acceptance school",
+      VECTOR_BOOTSTRAP_SCHOOL_SLUG: "release-acceptance-school",
+      VECTOR_BOOTSTRAP_ADMIN_EMAIL: "release.acceptance@example.test",
+      VECTOR_BOOTSTRAP_ADMIN_NAME: "Release acceptance administrator",
       VECTOR_BOOTSTRAP_ADMIN_PASSWORD: "release-acceptance-password-2026",
     };
     const startupArguments = [
@@ -1159,7 +1258,7 @@ export async function acceptReleaseCandidate({ directory, sourceCommit, tag } = 
       startupArguments,
       { cwd: root, env: runtimeEnvironment },
     );
-    runAcceptanceCommand(npm, [...npmArguments, "run", "doctor"], {
+    runAcceptanceCommand(npm.command, [...npm.arguments, "run", "doctor"], {
       cwd: root,
       env: runtimeEnvironment,
     });

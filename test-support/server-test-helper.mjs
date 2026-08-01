@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
 import { buildApp } from "../server/app.mjs";
 import { loadConfig } from "../server/config.mjs";
+import { closeHttpServer, configureHttpServer } from "../server/http.mjs";
 
 const ORIGIN = "http://127.0.0.1:4173";
 const ADMIN_PASSWORD = "vector-integration-password-2026";
 
-function clientFor(baseUrl) {
+function clientFor(baseUrl, origin = ORIGIN) {
   let cookie = "";
   let csrfToken = "";
 
@@ -29,7 +30,7 @@ function clientFor(baseUrl) {
         ...headers,
       };
       if (cookie) requestHeaders.cookie = cookie;
-      if (unsafe && requestHeaders.origin === undefined) requestHeaders.origin = ORIGIN;
+      if (unsafe && requestHeaders.origin === undefined) requestHeaders.origin = origin;
       if (unsafe && includeCsrf && csrfToken) requestHeaders["x-csrf-token"] = csrfToken;
       let requestBody;
       if (body !== undefined) {
@@ -68,15 +69,18 @@ export async function startTestApp({
   requireBootstrapPasswordChange = false,
   services,
   logLevel = "silent",
+  env = {},
 } = {}) {
+  const production = env.NODE_ENV === "production";
   const config = loadConfig({
-    NODE_ENV: "test",
+    NODE_ENV: production ? "production" : "test",
     VECTOR_DB_PATH: databasePath,
-    VECTOR_ORIGIN: ORIGIN,
-    VECTOR_COOKIE_SECURE: "false",
+    VECTOR_ORIGIN: production ? "https://vector.example.test" : ORIGIN,
+    VECTOR_COOKIE_SECURE: production ? "true" : "false",
     VECTOR_BOOTSTRAP_ADMIN_PASSWORD: ADMIN_PASSWORD,
     VECTOR_SEED_SYNTHETIC: seedSynthetic ? "true" : "false",
     VECTOR_LOG_LEVEL: logLevel,
+    ...env,
   });
   const app = await buildApp({ config, services });
   if (!requireBootstrapPasswordChange) {
@@ -84,7 +88,7 @@ export async function startTestApp({
       "UPDATE users SET must_change_password = 0 WHERE email = ?",
     ).run("admin@example.test");
   }
-  const server = createServer(app);
+  const server = configureHttpServer(createServer(app), config);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -95,14 +99,16 @@ export async function startTestApp({
     app,
     db: app.locals.vector.db,
     config,
+    server,
     baseUrl,
-    client: clientFor(baseUrl),
-    newClient: () => clientFor(baseUrl),
+    client: clientFor(baseUrl, config.origin),
+    newClient: () => clientFor(baseUrl, config.origin),
     async close() {
-      await new Promise((resolve, reject) => {
-        server.close((error) => error ? reject(error) : resolve());
+      await closeHttpServer(server, {
+        beginDrain: () => app.locals.vector.beginDrain(),
+        closeApplication: () => app.locals.vector.close(),
+        graceMs: config.shutdownGraceMs,
       });
-      app.locals.vector.close();
     },
   };
 }

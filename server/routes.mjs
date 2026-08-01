@@ -1,10 +1,10 @@
-import { rateLimit } from "express-rate-limit";
+import { MemoryStore, rateLimit } from "express-rate-limit";
 import { writeAudit } from "./audit.mjs";
 import {
   createSession,
-  deleteExpiredSessions,
   deleteSession,
   findUserForLogin,
+  SESSION_COOKIE,
   sessionCookieOptions,
   verifyRequestOrigin,
 } from "./auth.mjs";
@@ -141,26 +141,42 @@ import {
 } from "./users.mjs";
 import { APP_VERSION } from "./version.mjs";
 
-const loginLimiter = rateLimit({
-  windowMs: 60_000,
-  limit: 8,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  handler: (request, response) => {
-    if (request.invalidSessionCookie) {
-      const { config } = request.app.locals.vector;
-      response.clearCookie("vector_session", sessionCookieOptions(config));
+function createLoginLimiter(config, store) {
+  return rateLimit({
+    windowMs: 60_000,
+    limit: 8,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    store,
+    skipSuccessfulRequests: true,
+    validate: config.trustProxy === false
+      ? { xForwardedForHeader: false }
+      : true,
+    handler: (request, response) => {
+      if (request.invalidSessionCookie) {
+        response.clearCookie(SESSION_COOKIE, sessionCookieOptions(config));
+      }
+      response.status(429).json({
+        error: {
+          code: "rate_limited",
+          message: "Too many sign-in attempts. Try again shortly.",
+          requestId: request.id,
+        },
+      });
+    },
+  });
+}
+
+function requireLoginOrigin(config) {
+  return (request, _response, next) => {
+    try {
+      verifyRequestOrigin(request, config);
+      next();
+    } catch (error) {
+      next(error);
     }
-    response.status(429).json({
-      error: {
-        code: "rate_limited",
-        message: "Too many sign-in attempts. Try again shortly.",
-        requestId: request.id,
-      },
-    });
-  },
-});
+  };
+}
 
 function body(schema, request) {
   return parseInput(schema, request.body ?? {});
@@ -219,6 +235,27 @@ export function registerApiRoutes(app, services = {}) {
   const { db, config } = app.locals.vector;
   const passwordVerifier = services.verifyPassword ?? verifyPassword;
   const cursorCodec = services.cursorCodec ?? createCursorCodec();
+  const loginRateLimitStore = services.loginRateLimitStore ?? new MemoryStore();
+  app.locals.vector.registerCleanup(() => loginRateLimitStore.shutdown?.());
+  const loginLimiter = createLoginLimiter(config, loginRateLimitStore);
+  const loginAuditSchoolId = db.prepare(`
+    SELECT id
+    FROM schools
+    ORDER BY created_at, id
+    LIMIT 1
+  `).pluck().get();
+  if (!loginAuditSchoolId) {
+    throw new Error("API routes require an initialized school.");
+  }
+  const auditFailedLogin = (requestId) => writeAudit(db, {
+    schoolId: loginAuditSchoolId,
+    actorUserId: null,
+    action: "auth.login_failed",
+    entityType: "user",
+    entityId: null,
+    metadata: { reasonCode: "invalid_credentials" },
+    requestId,
+  });
 
   app.get("/api/health/live", (_request, response) => {
     response.json({ status: "ok", version: APP_VERSION });
@@ -276,10 +313,8 @@ export function registerApiRoutes(app, services = {}) {
     });
   });
 
-  app.post("/api/auth/login", loginLimiter, async (request, response) => {
-    verifyRequestOrigin(request, config);
+  app.post("/api/auth/login", requireLoginOrigin(config), loginLimiter, async (request, response) => {
     const input = body(LoginBody, request);
-    deleteExpiredSessions(db, config.sessionIdleMinutes);
     const row = findUserForLogin(db, input.email);
     const passwordMatches = await passwordVerifier(
       input.password,
@@ -287,17 +322,7 @@ export function registerApiRoutes(app, services = {}) {
     );
     const valid = row?.active === 1 && passwordMatches;
     if (!valid) {
-      if (row?.school_id) {
-        writeAudit(db, {
-          schoolId: row.school_id,
-          actorUserId: null,
-          action: "auth.login_failed",
-          entityType: "user",
-          entityId: row.id,
-          metadata: { reasonCode: row.active === 1 ? "invalid_credentials" : "inactive_user" },
-          requestId: request.id,
-        });
-      }
+      auditFailedLogin(request.id);
       throw new AppError(401, "invalid_credentials", "Email or password is incorrect.");
     }
 
@@ -315,9 +340,18 @@ export function registerApiRoutes(app, services = {}) {
         || fresh.revision !== row.revision
         || fresh.password_hash !== row.password_hash
       ) {
-        throw new AppError(401, "invalid_credentials", "Email or password is incorrect.");
+        auditFailedLogin(request.id);
+        return null;
       }
-      const createdSession = createSession(db, fresh.id, config.sessionHours);
+      // Replace the session presented by this browser instead of leaving the
+      // superseded bearer token usable until its idle or absolute expiry.
+      deleteSession(db, request.cookies[SESSION_COOKIE]);
+      const createdSession = createSession(
+        db,
+        fresh.id,
+        config.sessionHours,
+        config.sessionIdleMinutes,
+      );
       db.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?")
         .run(now, now, fresh.id);
       writeAudit(db, {
@@ -331,8 +365,11 @@ export function registerApiRoutes(app, services = {}) {
       });
       return { session: createdSession, user: fresh };
     }).immediate();
+    if (!loginResult) {
+      throw new AppError(401, "invalid_credentials", "Email or password is incorrect.");
+    }
     response.cookie(
-      "vector_session",
+      SESSION_COOKIE,
       loginResult.session.token,
       sessionCookieOptions(config, loginResult.session.expiresAt),
     );
@@ -356,7 +393,7 @@ export function registerApiRoutes(app, services = {}) {
   app.post("/api/auth/logout", (request, response) => {
     body(EmptyBody, request);
     db.transaction(() => {
-      deleteSession(db, request.cookies.vector_session);
+      deleteSession(db, request.cookies[SESSION_COOKIE]);
       writeAudit(db, {
         schoolId: request.user.schoolId,
         actorUserId: request.user.id,
@@ -367,7 +404,7 @@ export function registerApiRoutes(app, services = {}) {
         requestId: request.id,
       });
     })();
-    response.clearCookie("vector_session", sessionCookieOptions(config));
+    response.clearCookie(SESSION_COOKIE, sessionCookieOptions(config));
     return json(response, OkResponse, { ok: true });
   });
 
@@ -381,7 +418,7 @@ export function registerApiRoutes(app, services = {}) {
       request.id,
       services,
     );
-    response.clearCookie("vector_session", sessionCookieOptions(config));
+    response.clearCookie(SESSION_COOKIE, sessionCookieOptions(config));
     return json(response, OkResponse, { ok: true });
   });
 

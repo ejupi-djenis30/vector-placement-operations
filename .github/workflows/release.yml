@@ -23,6 +23,8 @@ env:
   NODE_VERSION: "22.23.1"
   GH_CLI_VERSION: "2.94.0"
   GH_CLI_SHA256: "a757f1ba6db18f4de8cbadb244843a5f89bc75b5e7c6fc127d2bd77fbd12ed62"
+  TRIVY_VERSION: "0.72.0"
+  TRIVY_SHA256: "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
   MIT_LICENSE_SHA256: "21303c465d4a75947e472df01cde991fda990c6edf3796bd9e76c626d9c543ec"
   RELEASE_PUBLICATION_ENABLED: "true"
 
@@ -86,8 +88,8 @@ jobs:
           npm run check
           npm audit --omit=dev --audit-level=high
 
-      - name: Install pinned Chromium runtime
-        run: npx --no-install playwright install --with-deps chromium
+      - name: Install pinned browser runtimes
+        run: npx --no-install playwright install --with-deps chromium webkit
 
       - name: Run browser acceptance tests
         run: npm run test:e2e
@@ -122,6 +124,20 @@ jobs:
             --commit "${GITHUB_SHA}" \
             "${arguments[@]}"
 
+      - name: Install checksummed Trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          printf '%s  %s\n' "${TRIVY_SHA256}" "${RUNNER_TEMP}/${archive}" \
+            | sha256sum --check --strict
+          tar --extract --gzip --file "${RUNNER_TEMP}/${archive}" \
+            --directory "${RUNNER_TEMP}" trivy
+          [[ "$("${RUNNER_TEMP}/trivy" --version)" == "Version: ${TRIVY_VERSION}" ]]
+
       - name: Build and exercise the exact production container
         shell: bash
         run: |
@@ -131,11 +147,25 @@ jobs:
           data_volume="vector-release-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           restore_volume="vector-release-restore-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           transfer="${RUNNER_TEMP}/vector-release-transfer"
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
           initialization_message="VECTOR initialization completed. Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from the environment and restart VECTOR before serving users."
           retained_secret_message="VECTOR_BOOTSTRAP_ADMIN_PASSWORD must be removed after initialization. Remove it from the environment and restart VECTOR."
           cleanup() {
             docker rm --force "${container}" >/dev/null 2>&1 || true
             docker volume rm "${data_volume}" "${restore_volume}" >/dev/null 2>&1 || true
+            if [[ -d "${transfer}" ]] && docker image inspect "${image}" >/dev/null 2>&1; then
+              docker run --rm --read-only \
+                --network none \
+                --user root \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --cap-add DAC_READ_SEARCH \
+                --security-opt no-new-privileges:true \
+                --mount "type=bind,source=${transfer},target=/transfer" \
+                "${image}" \
+                chown -R "${runner_uid}:${runner_gid}" /transfer >/dev/null 2>&1 || true
+            fi
             docker image rm --force "${image}" >/dev/null 2>&1 || true
             rm -rf "${transfer}"
           }
@@ -145,22 +175,52 @@ jobs:
             --build-arg "VECTOR_BUILD_REVISION=${GITHUB_SHA}" \
             --tag "${image}" \
             .
+          "${RUNNER_TEMP}/trivy" image \
+            --format cyclonedx \
+            --output "${RUNNER_TEMP}/vector-release-container.cdx.json" \
+            --no-progress \
+            "${image}"
+          "${RUNNER_TEMP}/trivy" image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --no-progress \
+            "${image}"
+          "${RUNNER_TEMP}/trivy" image \
+            --scanners secret \
+            --exit-code 1 \
+            --no-progress \
+            "${image}"
           [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${GITHUB_SHA}" ]]
           [[ "$(docker image inspect --format '{{json .Config.Cmd}}' "${image}")" == '["node","server/index.mjs"]' ]]
+          license_sha="$(sha256sum LICENSE | cut -d ' ' -f 1)"
+          image_license_sha="$(
+            docker run --rm --entrypoint sha256sum "${image}" \
+              /usr/share/licenses/vector/LICENSE | cut -d ' ' -f 1
+          )"
+          [[ "${image_license_sha}" == "${license_sha}" ]]
+          docker run --rm --entrypoint sh "${image}" -c \
+            'test ! -w /app/server/index.mjs \
+              && test ! -w /app/node_modules \
+              && test ! -w /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+              && test ! -w /usr/share/licenses/vector/LICENSE'
           docker volume create "${data_volume}" >/dev/null
           docker volume create "${restore_volume}" >/dev/null
           runtime_args=(
             --read-only \
-            --tmpfs "/tmp:rw,noexec,nosuid,size=64m" \
+            --tmpfs "/tmp:rw,nodev,noexec,nosuid,size=64m" \
             --cap-drop ALL \
             --security-opt no-new-privileges:true \
             --pids-limit 256 \
             --mount "type=volume,source=${data_volume},target=/var/lib/vector" \
             --env NODE_ENV=production \
-            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
-            --env VECTOR_COOKIE_SECURE=false
+            --env VECTOR_ORIGIN=https://vector.release.example.test \
+            --env VECTOR_COOKIE_SECURE=true
           )
           bootstrap_args=(
+            --env VECTOR_BOOTSTRAP_SCHOOL_NAME="Release school" \
+            --env VECTOR_BOOTSTRAP_SCHOOL_SLUG=release-school \
+            --env VECTOR_BOOTSTRAP_TIME_ZONE=Europe/Zurich \
             --env VECTOR_BOOTSTRAP_ADMIN_EMAIL=admin@example.test \
             --env VECTOR_BOOTSTRAP_ADMIN_NAME="Release administrator" \
             --env VECTOR_BOOTSTRAP_ADMIN_PASSWORD="release-container-password-2026" \
@@ -213,23 +273,30 @@ jobs:
           [[ "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "${container}")" == "true" ]]
           docker inspect --format '{{json .HostConfig.CapDrop}}' "${container}" | grep --fixed-strings '"ALL"'
           docker inspect --format '{{json .HostConfig.SecurityOpt}}' "${container}" | grep --fixed-strings 'no-new-privileges'
-          docker exec "${container}" npm run doctor
+          for removed_tool in npm npx corepack yarn yarnpkg pnpm pnpx; do
+            if docker exec "${container}" sh -c "command -v ${removed_tool} >/dev/null 2>&1"; then
+              printf 'Unexpected package-manager tool in runtime image: %s\n' "${removed_tool}"
+              exit 1
+            fi
+          done
+          docker exec "${container}" node scripts/doctor.mjs
           docker stop --time 15 "${container}" >/dev/null
           [[ "$(docker inspect --format '{{.State.ExitCode}}' "${container}")" == "0" ]]
           docker run --rm \
             --mount "type=volume,source=${data_volume},target=/var/lib/vector" \
             --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
-            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
-            --env VECTOR_COOKIE_SECURE=false \
+            --env VECTOR_ORIGIN=https://vector.release.example.test \
+            --env VECTOR_COOKIE_SECURE=true \
             "${image}" \
-            npm run db:backup -- --output /var/lib/vector/release-smoke.sqlite
+            node scripts/backup.mjs --output /var/lib/vector/release-smoke.sqlite
           mkdir -p "${transfer}"
           docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite" "${transfer}/release-smoke.sqlite"
           docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite.manifest.json" "${transfer}/release-smoke.sqlite.manifest.json"
           [[ -f "${transfer}/release-smoke.sqlite" && ! -L "${transfer}/release-smoke.sqlite" ]]
           [[ -f "${transfer}/release-smoke.sqlite.manifest.json" && ! -L "${transfer}/release-smoke.sqlite.manifest.json" ]]
-          # docker cp ownership varies across daemon and user-namespace modes. Normalize only the
-          # two synthetic transfer files for the non-root image user with a one-capability helper.
+          # docker cp and bind-root ownership vary across daemon and user-namespace modes. Make the
+          # synthetic transfer boundary private and node-owned together with its two files.
+          # The cleanup trap restores host-runner ownership before removing the temporary directory.
           docker run --rm --read-only \
             --network none \
             --user root \
@@ -238,39 +305,51 @@ jobs:
             --security-opt no-new-privileges:true \
             --mount "type=bind,source=${transfer},target=/transfer" \
             "${image}" \
-            chown node:node \
-              /transfer/release-smoke.sqlite \
-              /transfer/release-smoke.sqlite.manifest.json
+            sh -c 'chown root:root /transfer \
+              && chmod 0700 /transfer \
+              && chown node:node \
+                /transfer/release-smoke.sqlite \
+                /transfer/release-smoke.sqlite.manifest.json \
+              && chown node:node /transfer'
           docker run --rm --read-only \
-            --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+            --tmpfs /tmp:rw,nodev,noexec,nosuid,size=32m \
             --cap-drop ALL \
             --security-opt no-new-privileges:true \
             --mount "type=bind,source=${transfer},target=/transfer,readonly" \
             "${image}" \
-            npm run db:inspect-backup -- --file /transfer/release-smoke.sqlite
+            node scripts/inspect-backup.mjs --file /transfer/release-smoke.sqlite
           docker run --rm \
             --mount "type=bind,source=${transfer},target=/transfer,readonly" \
             --mount "type=volume,source=${restore_volume},target=/var/lib/vector" \
             --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
-            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
-            --env VECTOR_COOKIE_SECURE=false \
+            --env VECTOR_ORIGIN=https://vector.release.example.test \
+            --env VECTOR_COOKIE_SECURE=true \
             "${image}" \
-            npm run db:restore -- --file /transfer/release-smoke.sqlite --confirm-empty
+            node scripts/restore.mjs --file /transfer/release-smoke.sqlite --confirm-empty
           docker run --rm \
             --mount "type=volume,source=${restore_volume},target=/var/lib/vector" \
             --env NODE_ENV=production \
             --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
-            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
-            --env VECTOR_COOKIE_SECURE=false \
+            --env VECTOR_ORIGIN=https://vector.release.example.test \
+            --env VECTOR_COOKIE_SECURE=true \
             "${image}" \
-            npm run doctor
+            node scripts/doctor.mjs
           docker run --rm \
             --mount "type=volume,source=${restore_volume},target=/var/lib/vector" \
             --env VECTOR_DB_PATH=/var/lib/vector/vector.sqlite \
-            --env VECTOR_ORIGIN=http://127.0.0.1:4173 \
-            --env VECTOR_COOKIE_SECURE=false \
+            --env VECTOR_ORIGIN=https://vector.release.example.test \
+            --env VECTOR_COOKIE_SECURE=true \
             "${image}" \
-            npm run db:compact -- --confirm-maintenance
+            node scripts/compact.mjs --confirm-maintenance
+
+      - name: Upload container SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vector-release-container-sbom
+          path: ${{ runner.temp }}/vector-release-container.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
       - name: Upload verified release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -347,10 +426,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
-      artifact-metadata: write
+      contents: write # Required to create the immutable release and upload its assets.
+      id-token: write # Required for GitHub's OIDC-backed artifact signing.
+      attestations: write # Required to persist build-provenance attestations.
+      artifact-metadata: write # Required to publish the attested artifact metadata.
     steps:
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -441,10 +520,11 @@ jobs:
       - name: Publish exact immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: >-
           node scripts/publish-release.mjs
           --directory release
           --tag "${GITHUB_REF_NAME}"
           --repository "${GITHUB_REPOSITORY}"
-          --default-branch "${{ github.event.repository.default_branch }}"
+          --default-branch "${DEFAULT_BRANCH}"
           --source-commit "${GITHUB_SHA}"

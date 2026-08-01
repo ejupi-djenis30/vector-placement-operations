@@ -1,18 +1,23 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   assertCssBackgroundLayers,
+  assertBalancedCssBlocks,
   assertCssSelectorDeclaration,
   assertContrastRatio,
   assertExternalScriptsOnly,
   assertRobotsTxt,
+  assertRoleScopeClaims,
   assertSecurityTxt,
   assertSitemapXml,
   blendHexColorLayers,
   blendHexColors,
   combinedOpacity,
   contrastRatio,
+  normalizedElementText,
 } from "../scripts/site-validation.mjs";
+import { ROLE_DATA_SCOPES } from "../server/rbac.mjs";
 
 const document = (body) => `<!doctype html><html><head><title>Test</title></head><body>${body}</body></html>`;
 const pageUrl = "https://ejupi-djenis30.github.io/vector-placement-operations/";
@@ -44,11 +49,96 @@ const validSecurity = [
   "",
 ].join("\n");
 
+test("CSS block validation ignores comments and strings but rejects structural truncation", () => {
+  assert.equal(
+    assertBalancedCssBlocks(
+      '.card { content: "}"; /* { inert } */ color: CanvasText; }',
+      "fixture CSS",
+    ),
+    true,
+  );
+  assert.throws(
+    () => assertBalancedCssBlocks("@media (max-width: 30rem) { .card { color: red; }", "fixture CSS"),
+    /unclosed block opened at line 1/i,
+  );
+  assert.throws(
+    () => assertBalancedCssBlocks(".card { color: red; }}", "fixture CSS"),
+    /unmatched closing block at line 1/i,
+  );
+});
+
+test("marketing heading line breaks preserve searchable and copyable word boundaries", () => {
+  const marketing = readFileSync(new URL("../site/index.html", import.meta.url), "utf8");
+  for (const [id, expected] of [
+    ["hero-title", "Keep each placement accountable."],
+    ["product-title", "See the programme. Act on the gap."],
+    ["workflow-title", "One workflow. Each decision traceable."],
+    ["controls-title", "Straightforward to operate. Explicit where it matters."],
+    ["self-host-title", "A public product page. A private workspace."],
+  ]) {
+    assert.equal(normalizedElementText(marketing, id), expected);
+  }
+});
+
+test("public role claims stay aligned with the server RBAC scope matrix", () => {
+  const marketing = readFileSync(new URL("../site/index.html", import.meta.url), "utf8");
+  const claims = assertRoleScopeClaims(marketing, ROLE_DATA_SCOPES);
+  assert.equal(claims.tutor.scope, "assigned");
+  assert.equal(claims.viewer.scope, "school");
+
+  assert.throws(
+    () => assertRoleScopeClaims(
+      marketing.replace(
+        "Reads the school-wide placement picture in read-only mode.",
+        "Reads the explicitly granted school-wide or assignment-scoped picture.",
+      ),
+      ROLE_DATA_SCOPES,
+    ),
+    /viewer claim.*school-wide read-only scope without assigned scope/i,
+  );
+  assert.throws(
+    () => assertRoleScopeClaims(
+      marketing.replace(
+        'data-role="viewer" data-scope="school"',
+        'data-role="viewer" data-scope="assigned"',
+      ),
+      ROLE_DATA_SCOPES,
+    ),
+    /viewer must use school scope/i,
+  );
+  assert.throws(
+    () => assertRoleScopeClaims(
+      marketing.replace(
+        "Owns users, branding, retention and governed corrections.",
+        "Owns users, branding, retention, recovery and governed corrections.",
+      ),
+      ROLE_DATA_SCOPES,
+    ),
+    /administrator claim.*host-level recovery permissions/i,
+  );
+});
+
 test("site validation accepts external scripts with standards-compliant closing whitespace", () => {
   assert.doesNotThrow(() => assertExternalScriptsOnly(
     document('<script type="module" src="app.mjs"></script >'),
     "valid.html",
   ));
+});
+
+test("site validation permits only explicitly allowed inert structured data inline", () => {
+  assert.doesNotThrow(() => assertExternalScriptsOnly(
+    document('<script type="application/ld+json">{"@type":"SoftwareApplication"}</script>'),
+    "structured.html",
+    { allowedInlineScriptTypes: ["application/ld+json"] },
+  ));
+  assert.throws(
+    () => assertExternalScriptsOnly(
+      document("<script>globalThis.compromised = true</script>"),
+      "executable.html",
+      { allowedInlineScriptTypes: ["application/ld+json"] },
+    ),
+    /inline script/i,
+  );
 });
 
 test("site validation rejects inline code, event handlers, styles and malformed script tags", () => {

@@ -1,5 +1,5 @@
 import { writeAudit } from "./audit.mjs";
-import { conflict } from "./errors.mjs";
+import { AppError, conflict } from "./errors.mjs";
 import { requirePermission } from "./rbac.mjs";
 import {
   assertBrandPalette,
@@ -78,13 +78,12 @@ export function updateBranding(db, user, input, requestId) {
         return localDate < checkIn.startDate || localDate > checkIn.endDate;
       });
       if (conflicts.length > 0) {
-        const error = new Error(
+        throw new AppError(
+          422,
+          "time_zone_activity_conflict",
           "The selected time zone would move recorded check-ins outside their placement dates.",
+          { count: conflicts.length },
         );
-        error.statusCode = 422;
-        error.code = "time_zone_activity_conflict";
-        error.details = { count: conflicts.length };
-        throw error;
       }
     }
     const result = db.prepare(`

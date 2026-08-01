@@ -1,23 +1,23 @@
 import {
   chmodSync,
   existsSync,
-  linkSync,
   rmSync,
   unlinkSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { loadConfig } from "../server/config.mjs";
-import { openDatabase } from "../server/db.mjs";
+import { openDatabase, openExistingDatabase } from "../server/db.mjs";
 import { parseArgs, requireString } from "./cli-args.mjs";
 import {
   APP_VERSION,
   assertBackupFileSize,
   backupByteLimit,
-  captureFileIdentity,
   ensurePrivateDirectory,
+  fsyncDirectory,
   inspectDatabase,
+  inspectDatabaseConnection,
+  publishHardLink,
   removeFileIfOwned,
   resolveSafeOutput,
   sha256File,
@@ -28,6 +28,25 @@ if (process.platform !== "win32") process.umask(0o077);
 
 const args = parseArgs(process.argv.slice(2), { strings: ["output"] });
 const output = resolveSafeOutput(requireString(args, "output"));
+const config = loadConfig();
+const comparablePath = (value) => {
+  const resolved = path.resolve(value);
+  return ["darwin", "win32"].includes(process.platform)
+    ? resolved.toLowerCase()
+    : resolved;
+};
+const liveDatabase = path.resolve(config.databasePath);
+const reservedLiveState = new Set([
+  liveDatabase,
+  `${liveDatabase}-wal`,
+  `${liveDatabase}-shm`,
+  `${liveDatabase}-journal`,
+].map(comparablePath));
+if ([output, `${output}.manifest.json`].some(
+  (candidate) => reservedLiveState.has(comparablePath(candidate)),
+)) {
+  throw new Error("Backup output must not overlap the live SQLite database or its companions.");
+}
 if (existsSync(output) || existsSync(`${output}.manifest.json`)) {
   throw new Error("Backup output already exists.");
 }
@@ -35,11 +54,18 @@ ensurePrivateDirectory(path.dirname(output));
 const temporary = `${output}.backup-${process.pid}-${randomUUID()}.tmp`;
 const maximumBytes = backupByteLimit(process.env.VECTOR_BACKUP_MAX_BYTES);
 
-const config = loadConfig();
-inspectDatabase(config.databasePath);
-assertBackupFileSize(config.databasePath, maximumBytes);
-const db = new Database(config.databasePath, { readonly: true, fileMustExist: true });
+function removeTemporary(file) {
+  if (!existsSync(file)) return;
+  rmSync(file);
+  fsyncDirectory(path.dirname(file), { strict: false });
+}
+
+// Keep inspection and SQLite backup bound to the same safely opened inode. The
+// immutable snapshot still receives the full index-aware integrity check.
+const db = openExistingDatabase(config.databasePath, { readonly: true });
 try {
+  inspectDatabaseConnection(db, { fullIntegrity: false });
+  assertBackupFileSize(config.databasePath, maximumBytes);
   const pageSize = db.pragma("page_size", { simple: true });
   await db.backup(temporary, {
     progress({ totalPages }) {
@@ -52,7 +78,7 @@ try {
   if (process.platform !== "win32") chmodSync(temporary, 0o600);
   assertBackupFileSize(temporary, maximumBytes);
 } catch (error) {
-  if (existsSync(temporary)) rmSync(temporary);
+  removeTemporary(temporary);
   throw error;
 } finally {
   db.close();
@@ -87,12 +113,12 @@ try {
     migrationVersion: inspected.migrationVersion,
     counts: inspected.counts,
   };
-  outputIdentity = captureFileIdentity(temporary);
-  linkSync(temporary, output);
+  outputIdentity = publishHardLink(temporary, output);
   unlinkSync(temporary);
+  fsyncDirectory(path.dirname(temporary), { strict: false });
   manifestIdentity = writeManifestAtomic(output, manifest);
 } catch (error) {
-  if (existsSync(temporary)) rmSync(temporary);
+  removeTemporary(temporary);
   removeFileIfOwned(output, outputIdentity);
   removeFileIfOwned(`${output}.manifest.json`, manifestIdentity);
   throw error;

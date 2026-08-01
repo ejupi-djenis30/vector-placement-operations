@@ -23,9 +23,12 @@
   evidence requirements.
 - Blocks completion until the selected programme's verified hours, check-ins and evidence are ready.
 - Gives administrators, coordinators, tutors and viewers explicit, scoped permissions.
-- Expires inactive sessions on the server for safer use on shared school computers.
+- Expires inactive sessions and retains at most ten active sessions per user for safer use on
+  shared school computers.
 - Imports validated CSV files atomically and exports only data visible to the current role.
 - Pages large collections with bounded search and confidential, view-bound cursors.
+- Bounds each placement detail to 500 time entries, 200 check-ins and 200 document records,
+  rejecting further writes atomically instead of truncating operational history.
 - Records append-only audit events without copying personal fields into audit metadata.
 - Runs reviewed retention in deterministic batches with holds, previews and exact fingerprints.
 - Applies school branding at runtime, including a validated PNG logo and accessible colour pairs.
@@ -64,12 +67,15 @@ docker compose ps
 ```
 
 The default Compose binding is loopback-only. Put VECTOR behind a TLS-terminating reverse proxy
-before exposing it to a network. The complete setup, proxy and upgrade procedure is in
+before exposing it to a network. Forwarded headers are untrusted by default; set
+`VECTOR_TRUST_PROXY` to an exact hop count only after that controlled proxy is in place. The
+complete setup, proxy and upgrade procedure is in
 [docs/self-hosting.md](docs/self-hosting.md).
 
 ## Run directly
 
-Install Node.js 22 or newer and the locked dependencies:
+Install a supported LTS runtime—Node.js 22.23.1 through the Node 22 line, or Node.js 24.18.0
+through the Node 24 line—and the locked dependencies:
 
 ```bash
 cp .env.example .env
@@ -80,10 +86,16 @@ npm start
 npm start
 ```
 
+Developer, operator, audit and release commands run the same runtime preflight before starting
+their workload, so unsupported Node versions fail immediately with the accepted range.
+
 `npm start` loads `.env` with Node's built-in environment-file support. A new production database
 will not bootstrap without `VECTOR_BOOTSTRAP_ADMIN_PASSWORD`; initialization then exits before
 opening the HTTP listener so the secret can be removed. Review [.env.example](.env.example) for
-every runtime setting. Synthetic example records are disabled in production unless
+every runtime setting. Keep `NODE_ENV=production` exactly; unsupported aliases, casing and
+whitespace fail startup instead of falling back to evaluation defaults. Production also rejects
+every plain-HTTP `VECTOR_ORIGIN`, including loopback: configure the external HTTPS origin while the
+listener remains behind the TLS proxy. Synthetic example records are disabled in production unless
 `VECTOR_SEED_SYNTHETIC=true` is set explicitly.
 
 Useful operator commands:
@@ -117,6 +129,7 @@ See [docs/privacy-and-retention.md](docs/privacy-and-retention.md) and
 
 ```bash
 npm test
+npm run test:coverage
 npm run check:site
 npm run test:e2e
 npm run check:release
@@ -126,7 +139,15 @@ npm run check:audit
 The suite covers authentication, inactivity expiry and CSRF, role-scoped cohort coverage,
 confidential cursor pagination, atomic audit writes, versioned programme readiness, governed
 retention, safe imports/exports, session-free backup and verified restore, deterministic release
-archives and responsive browser behaviour.
+archives, full Chromium behaviour and a focused WebKit smoke path for login, roles, responsive
+navigation, dialogs, import and downloads. The separate native coverage gate includes server,
+operator-script and browser-application modules and enforces conservative 85% line, 75% branch and
+85% function floors without making Node's experimental coverage mode part of the standard check.
+
+For a descriptive production-mode rehearsal with 5,000 fictional students, 5,500 placements and
+their related records, run `npm run audit:scale`. The command creates and always removes its own
+temporary database; its latency and memory readings are diagnostic observations, not
+hardware-independent pass/fail limits.
 
 ## Releases
 

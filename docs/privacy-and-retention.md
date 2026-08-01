@@ -153,8 +153,10 @@ Execute only the reviewed batch by sending that fingerprint with the exact confi
 ```
 
 VECTOR rejects the execution with `409 retention_snapshot_changed` if any candidate, hold,
-placement status, date or revision changed after review. Run a new dry run and review it again; do
-not retry with the old fingerprint. Deleting a student also removes that student's placements and
+placement status, date or revision changed after review. Execution rechecks the fingerprint while
+holding an immediate SQLite write transaction, so another writer cannot change the approved batch
+between that check and deletion. Run a new dry run and review it again; do not retry with the old
+fingerprint. Deleting a student also removes that student's placements and
 dependent placement records. VECTOR writes one aggregated `retention.executed` audit event for
 each execution, including a zero-candidate execution.
 
@@ -168,7 +170,8 @@ checkpoint the write-ahead log. Schedule a maintenance window, create and inspec
 stop VECTOR and run:
 
 ```sh
-npm run db:compact -- --confirm-maintenance
+docker compose run --rm --no-deps vector \
+  node scripts/compact.mjs --confirm-maintenance
 ```
 
 Compaction enables SQLite secure deletion for the maintenance operation, checkpoints WAL and runs
@@ -190,6 +193,9 @@ decide the cutoff, approve the run, account for backups and verify the result.
 - Avoid verbose logs that include request bodies, record content, credentials or tokens.
 - Configure reverse-proxy access logs to omit the entire query string. A `query=` search can contain
   a student, staff member or host name; do not copy it into access logs, analytics or error reports.
+- Keep application diagnostics at VECTOR's route-template granularity. Its structured error log
+  uses placeholders such as `:id` rather than record identifiers and correlates failures through
+  `X-Request-ID`.
 - Apply the institution's requirements for hosting region, subprocessors and international
   transfers.
 

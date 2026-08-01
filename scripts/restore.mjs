@@ -34,14 +34,19 @@ for (const candidate of [
     throw new Error(`Restore target state already exists: ${candidate}`);
   }
 }
-const { manifest } = readAndVerifyManifest(file);
-ensurePrivateDirectory(path.dirname(destination));
 const maximumBytes = backupByteLimit(process.env.VECTOR_BACKUP_MAX_BYTES);
+const { manifest } = readAndVerifyManifest(file, maximumBytes);
+ensurePrivateDirectory(path.dirname(destination));
 let verified;
 let destinationIdentity = null;
 try {
-  destinationIdentity = atomicCopy(file, destination, maximumBytes);
-  verified = verifyDatabaseAgainstManifest(destination, manifest);
+  destinationIdentity = atomicCopy(
+    file,
+    destination,
+    maximumBytes,
+    manifest.sha256,
+  );
+  verified = verifyDatabaseAgainstManifest(destination, manifest, maximumBytes);
 } catch (error) {
   removeFileIfOwned(destination, destinationIdentity);
   throw error;

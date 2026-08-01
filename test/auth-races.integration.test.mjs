@@ -116,7 +116,7 @@ test("a password reset wins safely against a login verifying the old hash", asyn
       },
     },
   });
-  const { client } = instance;
+  const { client, db } = instance;
   const temporary = "login-race-temporary-2026";
   const userId = await createUser(client, {
     email: "login.race@example.test",
@@ -133,6 +133,9 @@ test("a password reset wins safely against a login verifying the old hash", asyn
   );
   const users = await client.request("/api/users");
   const revision = users.payload.items.find((item) => item.id === userId).revision;
+  const failedLoginsBefore = db.prepare(
+    "SELECT COUNT(*) FROM audit_events WHERE action = 'auth.login_failed'",
+  ).pluck().get();
 
   gateEnabled = true;
   const racingLogin = instance.newClient().login("login.race@example.test", oldPassword);
@@ -147,6 +150,25 @@ test("a password reset wins safely against a login verifying the old hash", asyn
   const staleLogin = await racingLogin;
   assert.equal(staleLogin.response.status, 401);
   assert.equal(staleLogin.payload.error.code, "invalid_credentials");
+  assert.equal(
+    db.prepare("SELECT COUNT(*) FROM audit_events WHERE action = 'auth.login_failed'")
+      .pluck().get(),
+    failedLoginsBefore + 1,
+  );
+  assert.deepEqual(db.prepare(`
+    SELECT
+      actor_user_id AS actorUserId,
+      entity_id AS entityId,
+      metadata_json AS metadata
+    FROM audit_events
+    WHERE action = 'auth.login_failed'
+    ORDER BY rowid DESC
+    LIMIT 1
+  `).get(), {
+    actorUserId: null,
+    entityId: null,
+    metadata: '{"reasonCode":"invalid_credentials"}',
+  });
   assert.equal(
     (await instance.newClient().login("login.race@example.test", oldPassword))
       .response.status,

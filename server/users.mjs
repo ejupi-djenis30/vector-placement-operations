@@ -2,15 +2,20 @@ import { randomUUID } from "node:crypto";
 import { writeAudit } from "./audit.mjs";
 import { AppError, conflict, notFound } from "./errors.mjs";
 import { hashPassword, verifyPassword } from "./password.mjs";
-import { hasPermission, requirePermission } from "./rbac.mjs";
+import {
+  hasPermission,
+  hasValidRoleScope,
+  requirePermission,
+} from "./rbac.mjs";
+import {
+  assertSupportedUserCollection,
+  assertUserCapacity,
+  MAX_USERS_PER_SCHOOL,
+  translateUserCapacityConstraint,
+} from "./user-limits.mjs";
 
 function assertRoleScope(role, dataScope) {
-  const valid = (
-    (["school_admin", "coordinator"].includes(role) && dataScope === "school")
-    || (role === "tutor" && dataScope === "assigned")
-    || (role === "viewer" && dataScope === "school")
-  );
-  if (!valid) {
+  if (!hasValidRoleScope(role, dataScope)) {
     throw new AppError(422, "invalid_role_scope", "The selected role and data scope are incompatible.");
   }
 }
@@ -33,7 +38,7 @@ function requireCurrentUserManager(db, actor) {
 
 export function listUsers(db, actor) {
   requirePermission(actor, "manage_users");
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       id,
       email,
@@ -47,8 +52,10 @@ export function listUsers(db, actor) {
       created_at AS createdAt
     FROM users
     WHERE school_id = ?
-    ORDER BY active DESC, display_name
-  `).all(actor.schoolId).map((row) => ({
+    ORDER BY active DESC, display_name COLLATE NOCASE, id
+    LIMIT ?
+  `).all(actor.schoolId, MAX_USERS_PER_SCHOOL + 1);
+  return assertSupportedUserCollection(rows).map((row) => ({
     ...row,
     active: row.active === 1,
     mustChangePassword: row.mustChangePassword === 1,
@@ -58,37 +65,45 @@ export function listUsers(db, actor) {
 export async function createUser(db, actor, input, requestId, services = {}) {
   requirePermission(actor, "manage_users");
   assertRoleScope(input.role, input.dataScope);
+  // Fail before the deliberately expensive password hash when the installation
+  // is already full, then repeat under the write reservation before inserting.
+  assertUserCapacity(db, actor.schoolId);
   const passwordHash = await (services.hashPassword ?? hashPassword)(input.password);
   const id = randomUUID();
   const now = new Date().toISOString();
-  db.transaction(() => {
-    requireCurrentUserManager(db, actor);
-    db.prepare(`
-      INSERT INTO users (
-        id, school_id, email, display_name, password_hash, role, data_scope,
-        active, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    `).run(
-      id,
-      actor.schoolId,
-      input.email.trim().toLowerCase(),
-      input.displayName.trim(),
-      passwordHash,
-      input.role,
-      input.dataScope,
-      now,
-      now,
-    );
-    writeAudit(db, {
-      schoolId: actor.schoolId,
-      actorUserId: actor.id,
-      action: "user.created",
-      entityType: "user",
-      entityId: id,
-      metadata: { role: input.role, scope: input.dataScope },
-      requestId,
-    });
-  }).immediate();
+  try {
+    db.transaction(() => {
+      requireCurrentUserManager(db, actor);
+      assertUserCapacity(db, actor.schoolId);
+      db.prepare(`
+        INSERT INTO users (
+          id, school_id, email, display_name, password_hash, role, data_scope,
+          active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      `).run(
+        id,
+        actor.schoolId,
+        input.email.trim().toLowerCase(),
+        input.displayName.trim(),
+        passwordHash,
+        input.role,
+        input.dataScope,
+        now,
+        now,
+      );
+      writeAudit(db, {
+        schoolId: actor.schoolId,
+        actorUserId: actor.id,
+        action: "user.created",
+        entityType: "user",
+        entityId: id,
+        metadata: { role: input.role, scope: input.dataScope },
+        requestId,
+      });
+    }).immediate();
+  } catch (error) {
+    translateUserCapacityConstraint(error);
+  }
   return id;
 }
 

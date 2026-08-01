@@ -1,6 +1,30 @@
+import { createApiClient } from "./api-client.mjs";
+import {
+  createElementFactory,
+  downloadFilename,
+  formatDate,
+  formatDateTime,
+  initials,
+  pageQueryParams,
+  placementPercentage as percentage,
+  titleCase,
+} from "./core.mjs";
+import {
+  auditQueryParams as buildAuditQueryParams,
+  isFrozenPlacement,
+  placementTransitions,
+  statusClass,
+  toDateTimeLocal,
+  workspaceAccess,
+} from "./workspace-domain.mjs";
+import { createProgrammeFeature } from "./workspace-programmes.mjs";
+import { createWorkspaceUi } from "./workspace-ui.mjs";
+
 const app = document.querySelector("#app");
+const workspaceSkipLink = document.querySelector('.skip-link[href="#workspace-main"]');
 const toastRegion = document.querySelector(".toast-region");
 const API = new URL("../api/", import.meta.url).pathname.replace(/\/$/, "");
+const { element, text } = createElementFactory(document);
 const state = {
   branding: null,
   session: null,
@@ -45,6 +69,7 @@ const state = {
 
 const pagedRequests = {
   attention: { generation: 0, controller: null },
+  audit: { generation: 0, controller: null },
   coverage: { generation: 0, controller: null },
   placements: { generation: 0, controller: null },
   students: { generation: 0, controller: null },
@@ -54,6 +79,57 @@ const pagedRequests = {
   tutors: { generation: 0, controller: null },
 };
 
+function setWorkspaceSkipLinkVisible(visible) {
+  if (workspaceSkipLink) workspaceSkipLink.hidden = !visible;
+}
+
+const apiClient = createApiClient({
+  basePath: API,
+  getCsrfToken: () => state.session?.csrfToken,
+  isAuthenticated: () => Boolean(state.session?.authenticated),
+  onAuthenticationRequired: () => {
+    closeActiveModal({ restoreFocus: false });
+    resetAuthenticatedState();
+    window.setTimeout(() => {
+      loginScreen({ focusEmail: true });
+      flash("Your session ended. Sign in to continue.", "error");
+    }, 0);
+  },
+});
+const request = (path, options) => apiClient.request(path, options);
+const {
+  closeActiveModal,
+  field,
+  formWithSubmit,
+  lookupControl,
+  openModal,
+  selectInput,
+  simpleInput,
+} = createWorkspaceUi({
+  document,
+  window,
+  app,
+  element,
+  request,
+  onError: (error) => flash(error.message, "error"),
+});
+const { renderProgrammes } = createProgrammeFeature({
+  element,
+  state,
+  request,
+  flash,
+  refreshCore,
+  renderWorkspace,
+  renderOverview,
+  viewHeader,
+  emptyPanel,
+  statusClass,
+  canManageProgrammes,
+  openModal,
+  formWithSubmit,
+  simpleInput,
+});
+
 function resetPageScroll() {
   window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   window.requestAnimationFrame(() => {
@@ -61,151 +137,61 @@ function resetPageScroll() {
   });
 }
 
-function element(tag, options = {}, children = []) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(options)) {
-    if (value === undefined || value === null) continue;
-    if (key === "class") node.className = value;
-    else if (key === "text") node.textContent = value;
-    else if (key.startsWith("on")) node.addEventListener(key.slice(2).toLowerCase(), value);
-    else if (key === "dataset") Object.assign(node.dataset, value);
-    else if (key === "attrs") Object.entries(value).forEach(([name, attribute]) => node.setAttribute(name, attribute));
-    else node[key] = value;
-  }
-  node.append(...children.filter(Boolean));
-  return node;
-}
-
-function text(value) {
-  return document.createTextNode(value ?? "");
-}
-
-function initials(name = "") {
-  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "V";
-}
-
-function titleCase(value = "") {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+function focusScreenHeading(heading) {
+  heading.tabIndex = -1;
+  window.requestAnimationFrame(() => heading.focus({ preventScroll: true }));
 }
 
 function canWrite() {
-  return ["school_admin", "coordinator", "tutor"].includes(state.session?.user?.role);
+  return workspaceAccess(state.session?.user).canWrite;
 }
 
 function canViewCoverage() {
-  const user = state.session?.user;
-  return ["school_admin", "coordinator"].includes(user?.role)
-    || (user?.role === "viewer" && user.dataScope === "school");
+  return workspaceAccess(state.session?.user).canViewCoverage;
 }
 
 function canManagePeople() {
-  return ["school_admin", "coordinator"].includes(state.session?.user?.role);
+  return workspaceAccess(state.session?.user).canManagePeople;
 }
 
 function canManagePlacement() {
-  return ["school_admin", "coordinator"].includes(state.session?.user?.role);
+  return workspaceAccess(state.session?.user).canManagePlacement;
 }
 
 function canManageProgrammes() {
-  return ["school_admin", "coordinator"].includes(state.session?.user?.role);
+  return workspaceAccess(state.session?.user).canManageProgrammes;
 }
 
 function canReviewEvidence() {
-  return canManagePlacement();
+  return workspaceAccess(state.session?.user).canReviewEvidence;
 }
 
 function isSchoolAdmin() {
-  return state.session?.user?.role === "school_admin";
+  return workspaceAccess(state.session?.user).isSchoolAdmin;
 }
 
 function canAudit() {
-  return ["school_admin", "coordinator"].includes(state.session?.user?.role);
+  return workspaceAccess(state.session?.user).canAudit;
 }
 
 function canManageBranding() {
-  return state.session?.user?.role === "school_admin";
-}
-
-function isFrozenPlacement(placement) {
-  return ["complete", "cancelled"].includes(placement.status);
-}
-
-function placementTransitions(status) {
-  return {
-    planned: ["active", "cancelled"],
-    active: ["review", "cancelled"],
-    review: ["active", "complete", "cancelled"],
-    cancelled: ["planned"],
-    complete: ["review"],
-  }[status] ?? [];
+  return workspaceAccess(state.session?.user).canManageBranding;
 }
 
 function canExport() {
-  return ["school_admin", "coordinator", "tutor"].includes(state.session?.user?.role);
-}
-
-function statusClass(status) {
-  return `status-pill status-${String(status).toLowerCase().replaceAll("_", "-")}`;
-}
-
-function formatDate(value) {
-  if (!value) return "—";
-  const date = new Date(`${value}`.length === 10 ? `${value}T12:00:00Z` : value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "short", year: "numeric" }).format(date);
-}
-
-function formatDateTime(value) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
-}
-
-function percentage(placement) {
-  return Math.min(100, Math.round((placement.loggedHours / placement.targetHours) * 100) || 0);
+  return workspaceAccess(state.session?.user).canExport;
 }
 
 function flash(message, type = "success") {
-  const toast = element("div", { class: `toast ${type === "error" ? "error" : ""}`, text: message });
+  if (type === "error" && !state.session && message === "Sign in to continue.") return;
+  const isError = type === "error";
+  const toast = element("div", {
+    class: `toast ${isError ? "error" : ""}`,
+    text: message,
+    attrs: { role: isError ? "alert" : "status" },
+  });
   toastRegion.append(toast);
   window.setTimeout(() => toast.remove(), 5000);
-}
-
-async function request(path, options = {}) {
-  const headers = new Headers(options.headers ?? {});
-  headers.set("Accept", "application/json");
-  if (options.body && typeof options.body !== "string" && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-    options.body = JSON.stringify(options.body);
-  }
-  if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase()) && state.session?.csrfToken) {
-    headers.set("X-CSRF-Token", state.session.csrfToken);
-  }
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers,
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  const contentType = response.headers.get("content-type") ?? "";
-  const payload = contentType.includes("application/json") ? await response.json().catch(() => null) : await response.text();
-  if (!response.ok) {
-    const error = new Error(payload?.error?.message || "The request could not be completed.");
-    error.code = payload?.error?.code;
-    error.details = payload?.error?.details;
-    error.status = response.status;
-    if (error.code === "authentication_required" && path !== "/auth/login" && state.session?.authenticated) {
-      resetCoverageSessionState();
-      state.session = null;
-      window.setTimeout(() => {
-        loginScreen();
-        flash("Your session ended. Sign in to continue.", "error");
-      }, 0);
-    }
-    throw error;
-  }
-  return payload;
 }
 
 async function downloadExport(resource) {
@@ -221,17 +207,14 @@ async function downloadExport(resource) {
       params.set("query", state.hostQuery);
       params.set("active", state.hostActive);
     }
-    const response = await fetch(`${API}/export?${params}`, {
+    const response = await apiClient.download(`/export?${params}`, {
       headers: { Accept: "text/csv" },
-      credentials: "same-origin",
-      cache: "no-store",
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      throw new Error(payload?.error?.message || "The filtered export could not be prepared.");
-    }
-    const filename = response.headers.get("content-disposition")?.match(/filename="?([^";]+)"?/i)?.[1] || `${resource}.csv`;
-    const url = URL.createObjectURL(await response.blob());
+    const filename = downloadFilename(
+      response.headers.get("content-disposition"),
+      `${resource}.csv`,
+    );
+    const url = URL.createObjectURL(response.blob);
     const link = element("a", { href: url, download: filename });
     document.body.append(link);
     link.click();
@@ -240,16 +223,6 @@ async function downloadExport(resource) {
     flash(`${titleCase(resource)} export downloaded for the current filters.`);
   } catch (error) {
     flash(error.message, "error");
-  }
-}
-
-async function apiAvailable() {
-  try {
-    const response = await fetch(`${API}/health/live`, { headers: { Accept: "application/json" }, cache: "no-store" });
-    const payload = response.ok ? await response.json() : null;
-    return payload?.status === "ok";
-  } catch {
-    return false;
   }
 }
 
@@ -359,26 +332,6 @@ async function loadWorkspaceData() {
   state.users = canManageBranding() ? results[offset]?.items ?? [] : [];
 }
 
-function pageQueryParams({
-  limit = 50,
-  cursor,
-  query = "",
-  status,
-  active,
-  category,
-  cohortId,
-  periodId,
-} = {}) {
-  const params = new URLSearchParams({ limit: String(limit), query });
-  if (cursor) params.set("cursor", cursor);
-  if (status) params.set("status", status);
-  if (active) params.set("active", active);
-  if (category) params.set("category", category);
-  if (cohortId) params.set("cohortId", cohortId);
-  if (periodId) params.set("periodId", periodId);
-  return params.toString();
-}
-
 function resetCoverageState(error = "") {
   state.coverage = [];
   state.coverageSummary = { total: 0, unplaced: 0, placed: 0, conflict: 0 };
@@ -386,17 +339,50 @@ function resetCoverageState(error = "") {
   state.coverageError = error;
 }
 
-function resetCoverageSessionState() {
-  const tracker = pagedRequests.coverage;
-  tracker.controller?.abort();
-  tracker.controller = null;
-  tracker.generation += 1;
+function resetAuthenticatedState() {
+  Object.values(pagedRequests).forEach((tracker) => {
+    tracker.controller?.abort();
+    tracker.controller = null;
+    tracker.generation += 1;
+  });
+  // Notifications live outside #app, so clear any authenticated-session
+  // message before rendering a sign-in or recovery boundary on shared devices.
+  toastRegion.replaceChildren();
+  state.session = null;
+  state.dashboard = null;
+  state.attention = [];
+  state.attentionNextCursor = null;
+  state.attentionQuery = "";
+  state.attentionCategory = "all";
   state.coverageReference = { cohorts: [], periods: [] };
   state.coverageQuery = "";
   state.coverageStatus = "all";
   state.coverageCohortId = "";
   state.coveragePeriodId = "";
   resetCoverageState();
+  state.placements = [];
+  state.placementsNextCursor = null;
+  state.overviewPlacements = [];
+  state.students = [];
+  state.studentsNextCursor = null;
+  state.hosts = [];
+  state.hostsNextCursor = null;
+  state.reference = { cohorts: [], periods: [], tutors: [] };
+  state.referenceNextCursor = { cohorts: null, periods: null, tutors: null };
+  state.referenceQuery = { cohorts: "", periods: "", tutors: "" };
+  state.programmes = [];
+  state.audit = [];
+  state.auditNextCursor = null;
+  state.auditFilters = { action: "", actorId: "", fromDate: "", toDate: "" };
+  state.users = [];
+  state.view = "overview";
+  state.selectedPlacement = null;
+  state.placementQuery = "";
+  state.placementStatus = "all";
+  state.studentQuery = "";
+  state.studentActive = "all";
+  state.hostQuery = "";
+  state.hostActive = "all";
 }
 
 function ensureCoverageDefaults() {
@@ -605,25 +591,40 @@ async function loadReferenceResource(resource, { append = false } = {}) {
   }
 }
 
-function auditQueryParams({ limit, cursor, exportOnly = false } = {}) {
-  const params = new URLSearchParams();
-  if (!exportOnly) params.set("limit", String(limit ?? 50));
-  if (!exportOnly && cursor) params.set("cursor", cursor);
-  const { action, actorId, fromDate, toDate } = state.auditFilters;
-  if (action.trim()) params.set("action", action.trim());
-  if (actorId) params.set("actorId", actorId);
-  if (fromDate) params.set("fromDate", fromDate);
-  if (toDate) params.set("toDate", toDate);
-  return params.toString();
+function auditQueryParams({
+  limit,
+  cursor,
+  exportOnly = false,
+  filters = state.auditFilters,
+} = {}) {
+  return buildAuditQueryParams({ limit, cursor, exportOnly, filters });
 }
 
 async function loadAudit({ append = false } = {}) {
-  const cursor = append ? state.auditNextCursor : null;
+  const tracker = pagedRequests.audit;
+  tracker.controller?.abort();
+  tracker.controller = new AbortController();
+  const generation = ++tracker.generation;
+  const snapshot = {
+    filters: { ...state.auditFilters },
+    cursor: append ? state.auditNextCursor : null,
+  };
+  const isCurrent = () => generation === tracker.generation
+    && Object.entries(snapshot.filters).every(([name, value]) => (
+      state.auditFilters[name] === value
+    ));
   try {
-    const result = await request(`/audit?${auditQueryParams({ limit: 50, cursor })}`);
+    const result = await request(`/audit?${auditQueryParams({
+      limit: 50,
+      cursor: snapshot.cursor,
+      filters: snapshot.filters,
+    })}`, { signal: tracker.controller.signal });
+    if (!isCurrent()) return false;
     state.audit = append ? [...state.audit, ...result.items] : result.items;
     state.auditNextCursor = result.nextCursor;
+    return true;
   } catch (error) {
+    if (error.name === "AbortError" || !isCurrent()) return false;
     if (append && error.code === "invalid_cursor") {
       state.auditNextCursor = null;
       flash("The audit page cursor expired. The first page has been refreshed.");
@@ -636,17 +637,14 @@ async function loadAudit({ append = false } = {}) {
 async function downloadAuditExport() {
   try {
     const query = auditQueryParams({ exportOnly: true });
-    const response = await fetch(`${API}/audit/export${query ? `?${query}` : ""}`, {
+    const response = await apiClient.download(`/audit/export${query ? `?${query}` : ""}`, {
       headers: { Accept: "text/csv" },
-      credentials: "same-origin",
-      cache: "no-store",
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      throw new Error(payload?.error?.message || "The audit export could not be prepared.");
-    }
-    const filename = response.headers.get("content-disposition")?.match(/filename="?([^";]+)"?/i)?.[1] || "audit.csv";
-    const url = URL.createObjectURL(await response.blob());
+    const filename = downloadFilename(
+      response.headers.get("content-disposition"),
+      "audit.csv",
+    );
+    const url = URL.createObjectURL(response.blob);
     const link = element("a", { href: url, download: filename });
     document.body.append(link);
     link.click();
@@ -659,19 +657,65 @@ async function downloadAuditExport() {
 }
 
 function unavailableScreen() {
+  setWorkspaceSkipLinkVisible(false);
   app.className = "app-unavailable";
-  app.replaceChildren(element("section", { class: "unavailable-card" }, [
+  app.removeAttribute("aria-live");
+  const heading = element("h1", { text: "This page needs a VECTOR installation." });
+  app.replaceChildren(element("main", { class: "unavailable-card" }, [
     element("div", { class: "login-brand" }, [element("img", { src: "../assets/vector-mark.svg", width: 38, height: 38, alt: "" }), text("VECTOR")]),
     element("p", { class: "eyebrow", text: "Self-hosted workspace" }),
-    element("h1", { text: "This page needs a VECTOR installation." }),
+    heading,
     element("p", { text: "The public repository site is a product presentation. Sign-in and records are available only when VECTOR is running on your own server." }),
     element("a", { class: "button button-primary", href: "../#self-host", text: "Read the setup path" }),
   ]));
   resetPageScroll();
+  focusScreenHeading(heading);
 }
 
-function loginScreen() {
+function workspaceRecoveryScreen(error) {
+  setWorkspaceSkipLinkVisible(false);
+  app.className = "app-unavailable";
+  app.removeAttribute("aria-live");
+  const heading = element("h1", { text: "The workspace is temporarily unavailable." });
+  const message = error?.code === "network_error"
+    ? "VECTOR could not reach this installation. Check your connection or the server, then try again."
+    : error?.code === "request_timeout"
+      ? "This installation took too long to answer. It may still be starting; wait a moment and try again."
+      : error?.retryable
+        ? "This installation is not ready to serve the workspace yet. Wait a moment and try again."
+        : "VECTOR could not finish loading this workspace. Try again or contact the installation administrator.";
+  const retry = element("button", {
+    class: "button button-primary",
+    type: "button",
+    text: "Try again",
+    onClick: async () => {
+      retry.disabled = true;
+      retry.textContent = "Trying again…";
+      resetAuthenticatedState();
+      await boot();
+    },
+  });
+  app.replaceChildren(element("main", { class: "unavailable-card" }, [
+    element("div", { class: "login-brand" }, [brandImage(), text(state.branding?.productName ?? "VECTOR")]),
+    element("p", { class: "eyebrow", text: "Workspace recovery" }),
+    heading,
+    element("p", { text: message }),
+    element("div", { class: "unavailable-actions" }, [
+      retry,
+      element("a", { class: "button", href: "../", text: "Product page" }),
+    ]),
+    error?.requestId
+      ? element("p", { class: "login-helper", text: `Request ID: ${error.requestId}` })
+      : null,
+  ]));
+  resetPageScroll();
+  focusScreenHeading(heading);
+}
+
+function loginScreen({ focusEmail = false } = {}) {
+  setWorkspaceSkipLinkVisible(false);
   app.className = "login-screen";
+  app.removeAttribute("aria-live");
   const email = element("input", { type: "email", id: "login-email", name: "email", autocomplete: "username", required: true });
   const password = element("input", { type: "password", id: "login-password", name: "password", autocomplete: "current-password", required: true });
   const notice = element("p", { class: "notice", hidden: true, attrs: { role: "alert" } });
@@ -688,7 +732,7 @@ function loginScreen() {
     button.textContent = "Signing in…";
     try {
       const session = await request("/auth/login", { method: "POST", body: { email: email.value, password: password.value } });
-      resetCoverageSessionState();
+      resetAuthenticatedState();
       state.session = session;
       if (state.session.user?.mustChangePassword) {
         forcedPasswordScreen();
@@ -711,7 +755,7 @@ function loginScreen() {
   const support = state.branding?.supportEmail
     ? element("a", { class: "text-link", href: `mailto:${state.branding.supportEmail}`, text: state.branding.supportEmail })
     : null;
-  app.replaceChildren(element("section", { class: "login-card" }, [
+  app.replaceChildren(element("main", { class: "login-card" }, [
     element("div", { class: "login-brand" }, [brandImage(), text(state.branding?.productName ?? "VECTOR")]),
     element("p", { class: "eyebrow", text: state.branding?.schoolName ?? "Placement operations" }),
     element("h1", { text: "Sign in to the workspace." }),
@@ -722,10 +766,13 @@ function loginScreen() {
     element("p", { class: "login-helper", text: state.branding?.footerText ?? "Self-hosted placement operations." }),
   ]));
   resetPageScroll();
+  if (focusEmail) email.focus();
 }
 
 function forcedPasswordScreen() {
+  setWorkspaceSkipLinkVisible(false);
   app.className = "login-screen";
+  app.removeAttribute("aria-live");
   const currentPassword = simpleInput("password", "", { required: true });
   const newPassword = simpleInput("password", "", { required: true });
   const confirmPassword = simpleInput("password", "", { required: true });
@@ -751,12 +798,11 @@ function forcedPasswordScreen() {
       method: "POST",
       body: { currentPassword: currentPassword.value, newPassword: newPassword.value },
     });
-    resetCoverageSessionState();
-    state.session = null;
+    resetAuthenticatedState();
     loginScreen();
     flash("Password changed. Sign in with the new password.");
   });
-  app.replaceChildren(element("section", { class: "login-card" }, [
+  app.replaceChildren(element("main", { class: "login-card" }, [
     element("div", { class: "login-brand" }, [brandImage(), text(state.branding?.productName ?? "VECTOR")]),
     element("p", { class: "eyebrow", text: "First sign-in security" }),
     element("h1", { text: "Set a permanent password." }),
@@ -782,25 +828,43 @@ function navButton(view, icon, label) {
   return button;
 }
 
+function revealCurrentNavigationItem(navigation) {
+  const current = navigation.querySelector('[aria-current="page"]');
+  if (!current) return;
+  const navigationRect = navigation.getBoundingClientRect();
+  const currentRect = current.getBoundingClientRect();
+
+  // Move only the overflow container. Element.scrollIntoView() can also move the
+  // page and alter the sequential keyboard-navigation origin after a reload.
+  if (currentRect.left < navigationRect.left) {
+    navigation.scrollLeft -= navigationRect.left - currentRect.left;
+  } else if (currentRect.right > navigationRect.right) {
+    navigation.scrollLeft += currentRect.right - navigationRect.right;
+  }
+}
+
 function renderWorkspace() {
+  setWorkspaceSkipLinkVisible(true);
   app.className = "workspace-shell";
+  app.removeAttribute("aria-live");
   const user = state.session.user;
+  const navigation = element("nav", { attrs: { "aria-label": "Workspace navigation" } }, [
+    navButton("overview", "▦", "Overview"),
+    navButton("attention", "!", "Attention"),
+    ...(canViewCoverage() ? [navButton("coverage", "▥", "Coverage")] : []),
+    navButton("placements", "◫", "Placements"),
+    navButton("students", "◎", "Students"),
+    navButton("hosts", "◇", "Hosts"),
+    ...(canManageProgrammes() ? [navButton("programmes", "⌘", "Programmes")] : []),
+    ...(canAudit() ? [navButton("audit", "≋", "Audit")] : []),
+    ...(canManageBranding() ? [navButton("settings", "⚙", "Settings")] : []),
+  ]);
   const sidebar = element("aside", { class: "workspace-sidebar" }, [
-    element("a", { class: "brand", href: "../", attrs: { "aria-label": "Back to product page" } }, [
+    element("a", { class: "brand", href: "./", attrs: { "aria-label": "Workspace overview" } }, [
       brandImage(),
       element("span", { text: state.branding.productName }),
     ]),
-    element("nav", { attrs: { "aria-label": "Workspace navigation" } }, [
-      navButton("overview", "▦", "Overview"),
-      navButton("attention", "!", "Attention"),
-      ...(canViewCoverage() ? [navButton("coverage", "▥", "Coverage")] : []),
-      navButton("placements", "◫", "Placements"),
-      navButton("students", "◎", "Students"),
-      navButton("hosts", "◇", "Hosts"),
-      ...(canManageProgrammes() ? [navButton("programmes", "⌘", "Programmes")] : []),
-      ...(canAudit() ? [navButton("audit", "≋", "Audit")] : []),
-      ...(canManageBranding() ? [navButton("settings", "⚙", "Settings")] : []),
-    ]),
+    navigation,
     element("div", { class: "sidebar-meta" }, [
       element("span", { text: titleCase(user.role) }),
       element("strong", { text: state.branding.schoolName }),
@@ -810,6 +874,7 @@ function renderWorkspace() {
   const main = element("main", { class: "workspace-main", id: "workspace-main", tabIndex: -1 });
   main.append(renderTopbar(), renderCurrentView());
   app.replaceChildren(sidebar, main);
+  revealCurrentNavigationItem(navigation);
 }
 
 function renderTopbar() {
@@ -819,9 +884,7 @@ function renderTopbar() {
   logout.addEventListener("click", async () => {
     try {
       await request("/auth/logout", { method: "POST", body: {} });
-      resetCoverageSessionState();
-      state.session = null;
-      state.view = "overview";
+      resetAuthenticatedState();
       loginScreen();
     } catch (error) { flash(error.message, "error"); }
   });
@@ -865,7 +928,7 @@ function renderOverview() {
   const attention = dashboard.attention;
   return element("section", {}, [
     viewHeader("01 / Operating overview", "Know what needs attention next.", "A live, role-scoped view of deadlines, reviews and assignments in this installation."),
-    element("div", { class: "metrics-grid", attrs: { "aria-label": "Placement metrics" } }, [
+    element("div", { class: "metrics-grid", attrs: { role: "group", "aria-label": "Placement metrics" } }, [
       metric("Placements", dashboard.placements, "in your permitted scope"),
       metric("In progress", dashboard.active, `${dashboard.review} waiting for close-out`),
       metric("Needs attention", attention.total, `${attention.overdue} overdue · ${attention.dueSoon} due soon`),
@@ -990,7 +1053,7 @@ function renderAttention() {
       }
     }, 250);
   });
-  const tabs = element("div", { class: "filter-tabs", attrs: { "aria-label": "Attention category filter" } });
+  const tabs = element("div", { class: "filter-tabs", attrs: { role: "group", "aria-label": "Attention category filter" } });
   [["all", "All"], ["evidence", "Evidence"], ["hours", "Hours"], ["status", "Status"], ["assignment", "Assignment"]]
     .forEach(([category, label]) => {
       const tab = element("button", {
@@ -1286,7 +1349,7 @@ function renderCoverage() {
   const metrics = element("div", {
     class: "metrics-grid coverage-metrics",
     dataset: { coverageMetrics: "true" },
-    attrs: { "aria-label": "Coverage metrics" },
+    attrs: { role: "group", "aria-label": "Coverage metrics" },
   });
   renderCoverageMetrics(metrics);
 
@@ -1298,7 +1361,7 @@ function renderCoverage() {
   });
   const tabs = element("div", {
     class: "filter-tabs",
-    attrs: { "aria-label": "Coverage status filter" },
+    attrs: { role: "group", "aria-label": "Coverage status filter" },
   });
   const card = element("section", { class: "workspace-card coverage-results-card" });
   const resultCount = element("p", {
@@ -1431,7 +1494,7 @@ function renderPlacements() {
       }
     }, 250);
   });
-  const tabs = element("div", { class: "filter-tabs", attrs: { "aria-label": "Placement status filter" } });
+  const tabs = element("div", { class: "filter-tabs", attrs: { role: "group", "aria-label": "Placement status filter" } });
   ["all", "active", "review", "planned", "complete", "cancelled"].forEach((status) => {
     const tab = element("button", { type: "button", text: status === "all" ? "All" : titleCase(status), attrs: { "aria-pressed": String(state.placementStatus === status) } });
     tab.addEventListener("click", async () => {
@@ -1678,13 +1741,6 @@ function entryReviewButton(placement, entry, verificationStatus) {
     }
   });
   return button;
-}
-
-function toDateTimeLocal(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 function timeEntryEditButton(placement, entry) {
@@ -1942,9 +1998,17 @@ function renderAudit() {
   const applyButton = element("button", { class: "button-small", type: "submit", text: "Apply filters" });
   const resetButton = element("button", { class: "row-button", type: "button", text: "Reset" });
   resetButton.addEventListener("click", async () => {
+    const previousFilters = state.auditFilters;
+    resetButton.disabled = true;
     state.auditFilters = { action: "", actorId: "", fromDate: "", toDate: "" };
-    await loadAudit();
-    renderWorkspace();
+    try {
+      await loadAudit();
+      renderWorkspace();
+    } catch (error) {
+      state.auditFilters = previousFilters;
+      flash(error.message, "error");
+      resetButton.disabled = false;
+    }
   });
   filterForm.append(element("div", { class: "form-actions audit-filter-actions" }, [applyButton, resetButton]));
   filterForm.addEventListener("submit", async (event) => {
@@ -2030,269 +2094,12 @@ function renderSettings() {
   ]);
 }
 
-function programmeRequirementsText(requirements) {
-  return requirements
-    .map((requirement) => (
-      `${requirement.code} | ${requirement.label} | ${requirement.acceptedStatuses.join(", ")}`
-    ))
-    .join("\n");
-}
-
-function parseProgrammeRequirements(value) {
-  const allowedStatuses = new Set(["draft", "ready", "signed", "archived"]);
-  const codes = new Set();
-  return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-    .map((line, index) => {
-      const [rawCode, rawLabel, rawStatuses, ...extra] = line.split("|");
-      const code = rawCode?.trim() ?? "";
-      const label = rawLabel?.trim() ?? "";
-      const acceptedStatuses = (rawStatuses ?? "")
-        .split(",")
-        .map((status) => status.trim().toLowerCase())
-        .filter(Boolean);
-      if (
-        extra.length
-        || !/^[a-z][a-z0-9_]{1,39}$/.test(code)
-        || !label
-        || !acceptedStatuses.length
-        || acceptedStatuses.some((status) => !allowedStatuses.has(status))
-        || new Set(acceptedStatuses).size !== acceptedStatuses.length
-        || codes.has(code)
-      ) {
-        throw new Error(
-          `Requirement line ${index + 1} must be: code | label | draft, ready, signed or archived.`,
-        );
-      }
-      codes.add(code);
-      return { code, label, acceptedStatuses };
-    });
-}
-
-function renderProgrammes() {
-  if (!canManageProgrammes()) return renderOverview();
-  const create = element("button", {
-    class: "button-small",
-    type: "button",
-    text: "New programme",
-    onClick: openProgrammeCreateForm,
-  });
-  const list = element("section", { class: "workspace-card programme-list" });
-  if (!state.programmes.length) {
-    list.append(emptyPanel(
-      "No programmes are configured.",
-      "Create the first version before opening placements.",
-    ));
-  }
-  state.programmes.forEach((programme) => {
-    const version = programme.currentVersion;
-    const requirements = version.requirements.length
-      ? version.requirements.map((item) => item.label).join(" · ")
-      : "No document requirements";
-    list.append(element("article", { class: "programme-row" }, [
-      element("div", {}, [
-        element("p", { class: "eyebrow", text: `${programme.code} / VERSION ${version.version}` }),
-        element("h2", { text: programme.name }),
-        element("p", { text: programme.description || "No programme note has been recorded." }),
-        element("small", {
-          text: `${version.defaultTargetHours} default hours · ${version.minimumCheckIns} minimum check-ins · ${requirements}`,
-        }),
-      ]),
-      element("div", { class: "list-actions" }, [
-        element("span", {
-          class: statusClass(programme.active ? "verified" : "cancelled"),
-          text: programme.active ? "Active" : "Inactive",
-        }),
-        element("button", {
-          class: "row-button",
-          type: "button",
-          text: "Version history",
-          onClick: () => openProgrammeHistory(programme),
-        }),
-        element("button", {
-          class: "row-button",
-          type: "button",
-          text: "Edit",
-          onClick: () => openProgrammeEditForm(programme),
-        }),
-        element("button", {
-          class: "row-button",
-          type: "button",
-          text: "Publish version",
-          onClick: () => openProgrammePublishForm(programme),
-        }),
-      ]),
-    ]));
-  });
-  return element("section", {}, [
-    viewHeader(
-      "06 / Programme policies",
-      "Rules that stay with the placement.",
-      "Publish immutable versions for target hours, check-ins and required evidence. Existing placements keep the version they started with.",
-      create,
-    ),
-    list,
-  ]);
-}
-
-async function openProgrammeHistory(programme) {
-  const result = await request(`/programmes/${programme.id}/versions`);
-  const list = element("section", { class: "programme-history" });
-  result.items.forEach((version) => {
-    const evidence = version.requirements.length
-      ? version.requirements.map((requirement) => (
-          `${requirement.label} (${requirement.acceptedStatuses.join(", ")})`
-        )).join(" · ")
-      : "No document requirements";
-    list.append(element("article", { class: "programme-history-row" }, [
-      element("div", { class: "programme-history-heading" }, [
-        element("p", { class: "eyebrow", text: `VERSION ${version.version}` }),
-        element("time", {
-          text: formatDateTime(version.publishedAt),
-          attrs: { datetime: version.publishedAt },
-        }),
-      ]),
-      element("p", {
-        text: `${version.defaultTargetHours} default hours · ${version.minimumCheckIns} minimum check-ins`,
-      }),
-      element("small", { text: evidence }),
-    ]));
-  });
-  openModal(
-    `${programme.name} · version history`,
-    "Every published version is immutable and remains available for placements that already use it.",
-    list,
-  );
-}
-
-function programmeVersionFields(version = null) {
-  const targetHours = simpleInput(
-    "number",
-    String(version?.defaultTargetHours ?? 160),
-    { required: true },
-  );
-  targetHours.min = "1";
-  targetHours.max = "2000";
-  targetHours.step = "0.5";
-  const minimumCheckIns = simpleInput(
-    "number",
-    String(version?.minimumCheckIns ?? 1),
-    { required: true },
-  );
-  minimumCheckIns.min = "0";
-  minimumCheckIns.max = "100";
-  minimumCheckIns.step = "1";
-  const requirements = element("textarea", {
-    value: programmeRequirementsText(version?.requirements ?? [
-      { code: "training_agreement", label: "Signed training agreement", acceptedStatuses: ["signed", "archived"] },
-      { code: "attendance_log", label: "Signed attendance log", acceptedStatuses: ["signed", "archived"] },
-      { code: "evaluation", label: "Completed evaluation", acceptedStatuses: ["ready", "signed", "archived"] },
-    ]),
-    required: true,
-  });
-  requirements.placeholder = "training_agreement | Signed training agreement | signed, archived";
-  return { targetHours, minimumCheckIns, requirements };
-}
-
-function openProgrammeCreateForm() {
-  const code = simpleInput("text", "", { required: true });
-  code.placeholder = "TECH_PLACEMENT";
-  const name = simpleInput("text", "", { required: true });
-  const description = element("textarea");
-  const version = programmeVersionFields();
-  const form = formWithSubmit([
-    { label: "Programme code", input: code },
-    { label: "Programme name", input: name },
-    { label: "Default target hours", input: version.targetHours },
-    { label: "Minimum check-ins", input: version.minimumCheckIns },
-    { label: "Operational description", input: description, full: true },
-    { label: "Requirements: code | label | accepted statuses", input: version.requirements, full: true },
-  ], "Create programme", async () => {
-    await request("/programmes", {
-      method: "POST",
-      body: {
-        code: code.value.trim().toUpperCase(),
-        name: name.value.trim(),
-        description: description.value.trim(),
-        defaultTargetHours: Number(version.targetHours.value),
-        minimumCheckIns: Number(version.minimumCheckIns.value),
-        requirements: parseProgrammeRequirements(version.requirements.value),
-      },
-    });
-    await refreshCore();
-    flash("Programme version 1 published.");
-    close();
-    renderWorkspace();
-  });
-  const { close } = openModal(
-    "New programme",
-    "The first version is published immediately. Later rule changes create a new immutable version.",
-    form,
-  );
-}
-
-function openProgrammeEditForm(programme) {
-  const code = simpleInput("text", programme.code, { required: true });
-  code.disabled = true;
-  const name = simpleInput("text", programme.name, { required: true });
-  const description = element("textarea", { value: programme.description });
-  const active = element("input", { type: "checkbox", checked: programme.active });
-  const form = formWithSubmit([
-    { label: "Programme code", input: code },
-    { label: "Programme name", input: name },
-    { label: "Active for new placements", input: active },
-    { label: "Operational description", input: description, full: true },
-  ], "Save programme", async () => {
-    await request(`/programmes/${programme.id}`, {
-      method: "PATCH",
-      body: {
-        revision: programme.revision,
-        name: name.value.trim(),
-        description: description.value.trim(),
-        active: active.checked,
-      },
-    });
-    await refreshCore();
-    flash("Programme details updated.");
-    close();
-    renderWorkspace();
-  });
-  const { close } = openModal(
-    "Edit programme",
-    "Metadata and availability may change. Published rules remain immutable.",
-    form,
-  );
-}
-
-function openProgrammePublishForm(programme) {
-  const version = programmeVersionFields(programme.currentVersion);
-  const form = formWithSubmit([
-    { label: "Default target hours", input: version.targetHours },
-    { label: "Minimum check-ins", input: version.minimumCheckIns },
-    { label: "Requirements: code | label | accepted statuses", input: version.requirements, full: true },
-  ], `Publish version ${programme.currentVersion.version + 1}`, async () => {
-    await request(`/programmes/${programme.id}/versions`, {
-      method: "POST",
-      body: {
-        revision: programme.revision,
-        defaultTargetHours: Number(version.targetHours.value),
-        minimumCheckIns: Number(version.minimumCheckIns.value),
-        requirements: parseProgrammeRequirements(version.requirements.value),
-      },
-    });
-    await refreshCore();
-    flash(`Programme version ${programme.currentVersion.version + 1} published.`);
-    close();
-    renderWorkspace();
-  });
-  const { close } = openModal(
-    `Publish ${programme.name}`,
-    "New placements may use this version. Existing placements retain their original policy and audit context.",
-    form,
-  );
-}
-
 function logoManager() {
-  const file = element("input", { type: "file", accept: "image/png" });
+  const file = element("input", {
+    type: "file",
+    accept: "image/png",
+    attrs: { "aria-label": "PNG logo file" },
+  });
   const upload = element("button", { class: "button-small", type: "button", text: "Upload PNG logo" });
   const remove = element("button", { class: "button-small", type: "button", text: "Remove logo", disabled: !state.branding.hasLogo });
   const reconcileConflict = async (error) => {
@@ -2564,8 +2371,7 @@ function openChangePasswordForm() {
       method: "POST",
       body: { currentPassword: currentPassword.value, newPassword: newPassword.value },
     });
-    resetCoverageSessionState();
-    state.session = null;
+    resetAuthenticatedState();
     close();
     loginScreen();
     flash("Password changed. Sign in with the new password.");
@@ -2630,158 +2436,6 @@ function brandingForm() {
     }
   });
   return form;
-}
-
-function field(label, input) {
-  const labelTarget = input.labelTarget ?? input;
-  const id = labelTarget.id || `field-${crypto.randomUUID()}`;
-  labelTarget.id = id;
-  return element("div", { class: "field" }, [element("label", { htmlFor: id, text: label }), input]);
-}
-
-function simpleInput(type, value = "", { required = false } = {}) {
-  return element("input", { type, value, required });
-}
-
-function openModal(title, description, form) {
-  const titleId = `modal-title-${crypto.randomUUID()}`;
-  const descriptionId = `modal-description-${crypto.randomUUID()}`;
-  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const modal = element("div", {
-    class: "modal",
-    attrs: { role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "aria-describedby": descriptionId },
-  });
-  let closed = false;
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    modal.removeEventListener("keydown", handleKeydown);
-    modal.remove();
-    app.inert = false;
-    document.body.classList.remove("modal-open");
-    opener?.focus();
-  };
-  const closeButton = element("button", {
-    class: "modal-close",
-    type: "button",
-    text: "×",
-    attrs: { "aria-label": "Close dialog" },
-    onClick: close,
-  });
-  const card = element("section", { class: "modal-card" }, [
-    element("header", { class: "modal-header" }, [
-      element("div", {}, [
-        element("h2", { id: titleId, text: title }),
-        element("p", { id: descriptionId, text: description }),
-      ]),
-      closeButton,
-    ]),
-    form,
-  ]);
-  modal.append(card);
-  function focusableElements() {
-    return [...modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
-      .filter((node) => !node.hidden && node.getAttribute("aria-hidden") !== "true");
-  }
-  function handleKeydown(event) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusable = focusableElements();
-    if (!focusable.length) { event.preventDefault(); card.focus(); return; }
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-  modal.addEventListener("keydown", handleKeydown);
-  modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
-  app.inert = true;
-  document.body.classList.add("modal-open");
-  document.body.append(modal);
-  (form.querySelector("input, select, textarea, button:not([disabled])") ?? closeButton).focus();
-  return { close, modal };
-}
-
-function formWithSubmit(fields, submitLabel, onSubmit) {
-  const form = element("form", { class: "form-grid" });
-  fields.forEach(({ label, input, full = false }) => { const item = field(label, input); if (full) item.classList.add("full"); form.append(item); });
-  form.append(element("div", { class: "form-actions full" }, [element("button", { class: "button-submit", type: "submit", text: submitLabel })]));
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = form.querySelector("button[type=submit]"); button.disabled = true;
-    try { await onSubmit(); } catch (error) { flash(error.message, "error"); button.disabled = false; }
-  });
-  return form;
-}
-
-function selectInput(items, selected = "", emptyLabel = "Not assigned") {
-  const select = element("select");
-  select.append(element("option", { value: "", text: emptyLabel }));
-  items.forEach(([value, label]) => select.append(element("option", { value, text: label, selected: value === selected })));
-  return select;
-}
-
-function lookupControl(resource, { initial = null, required = false, placeholder = "Search" } = {}) {
-  const search = simpleInput("search", "", { placeholder });
-  search.autocomplete = "off";
-  const select = element("select", { required, attrs: { "aria-label": `${placeholder} results` } });
-  const hint = element("small", { class: "lookup-hint", text: "Type to refine the active records shown below." });
-  const control = element("div", { class: "lookup-control" }, [search, select, hint]);
-  control.labelTarget = search;
-  Object.defineProperty(control, "value", { get: () => select.value });
-  let sequence = 0;
-  let timer = null;
-
-  const populate = (items, nextCursor) => {
-    const selectedValue = select.value || initial?.id || "";
-    const selectedLabel = select.selectedOptions[0]?.textContent || initial?.label || "Current selection";
-    const options = [...items];
-    if (selectedValue && !options.some((item) => item.id === selectedValue)) {
-      options.unshift({ id: selectedValue, label: selectedLabel, secondary: initial?.secondary ?? "" });
-    }
-    select.replaceChildren(element("option", { value: "", text: required ? "Select a record" : "Not assigned" }));
-    options.forEach((item) => select.append(element("option", {
-      value: item.id,
-      text: item.secondary ? `${item.label} · ${item.secondary}` : item.label,
-      selected: item.id === selectedValue,
-    })));
-    if (selectedValue) select.value = selectedValue;
-    hint.textContent = nextCursor
-      ? "More matches exist. Refine the search to narrow the list."
-      : `${items.length} active match${items.length === 1 ? "" : "es"}.`;
-  };
-
-  const load = async () => {
-    const current = ++sequence;
-    search.setAttribute("aria-busy", "true");
-    try {
-      const result = await request(`/lookups/${resource}?${pageQueryParams({ limit: 20, query: search.value.trim() })}`);
-      if (current === sequence) populate(result.items, result.nextCursor);
-    } catch (error) {
-      if (current === sequence) {
-        hint.textContent = error.message;
-        hint.classList.add("error");
-      }
-    } finally {
-      if (current === sequence) search.removeAttribute("aria-busy");
-    }
-  };
-  populate(initial ? [initial] : [], null);
-  search.addEventListener("input", () => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(load, 220);
-  });
-  window.setTimeout(load, 0);
-  return control;
 }
 
 function openStudentForm() {
@@ -3163,19 +2817,36 @@ function openReferenceDataManager() {
     if (state.referenceQuery[resource]) {
       const reset = element("button", { class: "row-button", type: "button", text: "Reset" });
       reset.addEventListener("click", async () => {
+        const previousQuery = state.referenceQuery[resource];
+        reset.disabled = true;
         state.referenceQuery[resource] = "";
-        await loadReferenceResource(resource);
-        close();
-        openReferenceDataManager();
+        try {
+          await loadReferenceResource(resource);
+          close();
+          openReferenceDataManager();
+        } catch (error) {
+          state.referenceQuery[resource] = previousQuery;
+          flash(error.message, "error");
+          reset.disabled = false;
+        }
       });
       searchForm.append(reset);
     }
     searchForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const submit = searchForm.querySelector('button[type="submit"]');
+      const previousQuery = state.referenceQuery[resource];
+      submit.disabled = true;
       state.referenceQuery[resource] = search.value.trim();
-      await loadReferenceResource(resource);
-      close();
-      openReferenceDataManager();
+      try {
+        await loadReferenceResource(resource);
+        close();
+        openReferenceDataManager();
+      } catch (error) {
+        state.referenceQuery[resource] = previousQuery;
+        flash(error.message, "error");
+        submit.disabled = false;
+      }
     });
     section.append(searchForm);
 
@@ -3186,9 +2857,14 @@ function openReferenceDataManager() {
       const loadMore = element("button", { class: "row-button", type: "button", text: `Load more ${title.toLowerCase()}` });
       loadMore.addEventListener("click", async () => {
         loadMore.disabled = true;
-        await loadReferenceResource(resource, { append: true });
-        close();
-        openReferenceDataManager();
+        try {
+          await loadReferenceResource(resource, { append: true });
+          close();
+          openReferenceDataManager();
+        } catch (error) {
+          flash(error.message, "error");
+          loadMore.disabled = false;
+        }
       });
       section.append(element("div", { class: "load-more-row" }, [loadMore]));
     }
@@ -3296,17 +2972,14 @@ function openPeriodEditForm(period) {
 
 async function downloadImportTemplate(resource) {
   try {
-    const response = await fetch(`${API}/import/${encodeURIComponent(resource)}/template`, {
+    const response = await apiClient.download(`/import/${encodeURIComponent(resource)}/template`, {
       headers: { Accept: "text/csv" },
-      credentials: "same-origin",
-      cache: "no-store",
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      throw new Error(payload?.error?.message || "The CSV template could not be downloaded.");
-    }
-    const filename = response.headers.get("content-disposition")?.match(/filename="?([^";]+)"?/i)?.[1] || `vector-${resource}-import-template.csv`;
-    const url = URL.createObjectURL(await response.blob());
+    const filename = downloadFilename(
+      response.headers.get("content-disposition"),
+      `vector-${resource}-import-template.csv`,
+    );
+    const url = URL.createObjectURL(response.blob);
     const link = element("a", { href: url, download: filename });
     document.body.append(link);
     link.click();
@@ -3603,22 +3276,33 @@ async function refreshCore() {
 }
 
 async function boot() {
-  if (!await apiAvailable()) { unavailableScreen(); return; }
+  app.setAttribute("aria-busy", "true");
   try {
-    state.branding = await request("/public/branding");
+    const [branding, session] = await Promise.all([
+      request("/public/branding", {
+        handleAuthentication: false,
+        timeoutMs: 5_000,
+      }),
+      request("/session", {
+        handleAuthentication: false,
+        timeoutMs: 5_000,
+      }),
+    ]);
+    state.branding = branding;
     applyBranding(state.branding);
-    state.session = await request("/session");
+    state.session = session;
     if (!state.session.authenticated) { loginScreen(); return; }
     if (state.session.user?.mustChangePassword) { forcedPasswordScreen(); return; }
     await loadWorkspaceData();
     renderWorkspace();
   } catch (error) {
-    app.className = "app-unavailable";
-    app.replaceChildren(element("section", { class: "unavailable-card" }, [
-      element("h1", { text: "The workspace could not start." }),
-      element("p", { text: error.message }),
-      element("a", { class: "button button-primary", href: "../", text: "Back to product page" }),
-    ]));
+    if (error?.status === 404) {
+      unavailableScreen();
+      return;
+    }
+    workspaceRecoveryScreen(error);
+  } finally {
+    app.removeAttribute("aria-busy");
   }
 }
 

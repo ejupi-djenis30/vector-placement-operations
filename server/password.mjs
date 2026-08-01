@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCallback);
 const KEY_LENGTH = 64;
+const MAX_ENCODED_HASH_LENGTH = 256;
 const OPTIONS = Object.freeze({ N: 16_384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
 export const DUMMY_PASSWORD_HASH = "scrypt$16384$8$1$X82FJFFrlqo3gJuSpZ6kwA$5EVbZsnzORaNyn0nB6WVl_MAexcYmuijxmyqLgkybxNjD76-GVW3fIzdG8PQRdk7-MxKAZXaT06er05m0MASRQ";
 
@@ -28,18 +29,37 @@ export async function hashPassword(password) {
 
 export async function verifyPassword(password, encoded) {
   try {
-    const [algorithm, rawN, rawR, rawP, rawSalt, rawHash] = encoded.split("$");
+    if (
+      typeof password !== "string"
+      || password.length > 256
+      || typeof encoded !== "string"
+      || encoded.length > MAX_ENCODED_HASH_LENGTH
+    ) return false;
+    const fields = encoded.split("$");
+    if (fields.length !== 6) return false;
+    const [algorithm, rawN, rawR, rawP, rawSalt, rawHash] = fields;
     if (algorithm !== "scrypt") return false;
     const N = Number(rawN);
     const r = Number(rawR);
     const p = Number(rawP);
-    if (N < 16_384 || N > 131_072 || (N & (N - 1)) !== 0) return false;
-    if (!Number.isInteger(r) || r < 8 || r > 32) return false;
-    if (!Number.isInteger(p) || p < 1 || p > 8) return false;
-    if (typeof password !== "string" || password.length > 256) return false;
+    if (
+      !Number.isInteger(N)
+      || String(N) !== rawN
+      || N < 16_384
+      || N > 131_072
+      || (N & (N - 1)) !== 0
+    ) return false;
+    if (!Number.isInteger(r) || String(r) !== rawR || r < 8 || r > 32) return false;
+    if (!Number.isInteger(p) || String(p) !== rawP || p < 1 || p > 8) return false;
     const salt = Buffer.from(rawSalt, "base64url");
     const expected = Buffer.from(rawHash, "base64url");
-    if (salt.length < 16 || salt.length > 64 || expected.length !== KEY_LENGTH) return false;
+    if (
+      salt.length < 16
+      || salt.length > 64
+      || expected.length !== KEY_LENGTH
+      || salt.toString("base64url") !== rawSalt
+      || expected.toString("base64url") !== rawHash
+    ) return false;
     const options = {
       N,
       r,

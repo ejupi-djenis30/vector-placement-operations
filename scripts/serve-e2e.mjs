@@ -1,19 +1,20 @@
-import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { buildApp } from "../server/app.mjs";
 import { loadConfig } from "../server/config.mjs";
+import { resolveE2ePorts } from "./e2e-ports.mjs";
 
 const HOST = "127.0.0.1";
-const PORT = 4173;
-const temporaryDirectory = mkdtempSync(join(tmpdir(), "vector-e2e-"));
+const { workspace: PORT } = resolveE2ePorts();
 const password = process.env.VECTOR_E2E_PASSWORD ?? "vector-e2e-password-2026";
 const config = loadConfig({
   NODE_ENV: "test",
   VECTOR_HOST: HOST,
   VECTOR_PORT: String(PORT),
-  VECTOR_DB_PATH: join(temporaryDirectory, "vector.sqlite"),
+  // Playwright force-stops web servers on Windows, where POSIX shutdown
+  // signals are unavailable. An in-memory fixture avoids leaking temporary
+  // SQLite directories while file-backed WAL behaviour remains covered by
+  // the integration and release-acceptance suites.
+  VECTOR_DB_PATH: ":memory:",
   VECTOR_ORIGIN: `http://${HOST}:${PORT}`,
   VECTOR_COOKIE_SECURE: "false",
   VECTOR_BOOTSTRAP_ADMIN_EMAIL: "vector-e2e-admin@example.test",
@@ -31,7 +32,6 @@ function cleanup() {
   if (cleaned) return;
   cleaned = true;
   app.locals.vector.close();
-  rmSync(temporaryDirectory, { recursive: true, force: true });
 }
 
 function shutdown(exitCode = 0) {

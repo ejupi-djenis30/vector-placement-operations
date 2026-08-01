@@ -1,7 +1,13 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { AppError } from "./errors.mjs";
 
 export const SESSION_COOKIE = "vector_session";
+export const MAX_ACTIVE_SESSIONS_PER_USER = 10;
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -62,11 +68,35 @@ export function findUserForLogin(db, email) {
   `).get(email.trim().toLowerCase());
 }
 
-export function createSession(db, userId, sessionHours) {
+export function createSession(
+  db,
+  userId,
+  sessionHours,
+  sessionIdleMinutes = 45,
+  now = new Date(),
+) {
+  if (!db.inTransaction) {
+    throw new Error("Session creation requires an active database transaction.");
+  }
   const token = randomBytes(32).toString("base64url");
   const csrfToken = randomBytes(24).toString("base64url");
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + sessionHours * 60 * 60 * 1000);
+  const createdAt = dateFrom(now, "now");
+  const expiresAt = new Date(createdAt.getTime() + sessionHours * 60 * 60 * 1000);
+  deleteExpiredSessions(db, sessionIdleMinutes, createdAt);
+  db.prepare(`
+    DELETE FROM sessions
+    WHERE user_id = @userId
+      AND id NOT IN (
+        SELECT id
+        FROM sessions
+        WHERE user_id = @userId
+        ORDER BY last_seen_at DESC, created_at DESC, id DESC
+        LIMIT @retained
+      )
+  `).run({
+    userId,
+    retained: MAX_ACTIVE_SESSIONS_PER_USER - 1,
+  });
   db.prepare(`
     INSERT INTO sessions (
       id, user_id, token_hash, csrf_token, expires_at, created_at, last_seen_at
@@ -77,8 +107,8 @@ export function createSession(db, userId, sessionHours) {
     sha256(token),
     csrfToken,
     expiresAt.toISOString(),
-    now.toISOString(),
-    now.toISOString(),
+    createdAt.toISOString(),
+    createdAt.toISOString(),
   );
   return { token, csrfToken, expiresAt };
 }
@@ -128,8 +158,9 @@ export function readSession(
     LIMIT 1
   `).get(parameters);
   if (!row) {
-    db.prepare(`
-      DELETE FROM sessions
+    const invalidSession = db.prepare(`
+      SELECT 1
+      FROM sessions
       WHERE token_hash = @tokenHash
         AND (
           expires_at <= @nowIso
@@ -141,7 +172,24 @@ export function readSession(
               AND u.active = 1
           )
         )
-    `).run(parameters);
+      LIMIT 1
+    `).get(parameters);
+    if (invalidSession) {
+      db.prepare(`
+        DELETE FROM sessions
+        WHERE token_hash = @tokenHash
+          AND (
+            expires_at <= @nowIso
+            OR last_seen_at <= @idleCutoffIso
+            OR NOT EXISTS (
+              SELECT 1
+              FROM users u
+              WHERE u.id = sessions.user_id
+                AND u.active = 1
+            )
+          )
+      `).run(parameters);
+    }
     return null;
   }
   return {
@@ -181,7 +229,7 @@ export function touchSession(
 
 export function sessionCookieOptions(config, expires = undefined) {
   return {
-    path: "/",
+    path: "/api",
     httpOnly: true,
     sameSite: "strict",
     secure: config.cookieSecure,
@@ -206,10 +254,21 @@ export function verifyRequestOrigin(request, config) {
 
 export function verifyCsrf(request) {
   const provided = request.headers["x-csrf-token"];
+  const expected = request.session?.csrfToken;
+  let matches = false;
+  if (typeof provided === "string" && typeof expected === "string") {
+    const providedBytes = Buffer.from(provided, "utf8");
+    const expectedBytes = Buffer.from(expected, "utf8");
+    const comparableBytes = providedBytes.length === expectedBytes.length
+      ? providedBytes
+      : Buffer.alloc(expectedBytes.length);
+    matches = timingSafeEqual(comparableBytes, expectedBytes)
+      && providedBytes.length === expectedBytes.length;
+  }
   if (
     typeof provided !== "string"
-    || !request.session?.csrfToken
-    || provided !== request.session.csrfToken
+    || typeof expected !== "string"
+    || !matches
   ) {
     throw new AppError(403, "invalid_csrf", "The request could not be verified.");
   }

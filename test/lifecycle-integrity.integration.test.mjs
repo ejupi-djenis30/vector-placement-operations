@@ -286,7 +286,8 @@ test("only an administrator can reopen a completed placement with an audited rea
     200,
   );
 
-  const coordinatorPassword = "coordinator-temporary-2026";
+  const coordinatorPassword = ["coordinator", "temporary", "2026"].join("-");
+  const coordinatorReplacementPassword = ["coordinator", "replacement", "2026"].join("-");
   const coordinatorId = await created(client, "/api/users", {
     email: "coordinator.reopen@example.test",
     displayName: "Synthetic coordinator",
@@ -305,7 +306,7 @@ test("only an administrator can reopen a completed placement with an audited rea
       method: "POST",
       body: {
         currentPassword: coordinatorPassword,
-        newPassword: "coordinator-replacement-2026",
+        newPassword: coordinatorReplacementPassword,
       },
     })).response.status,
     200,
@@ -313,7 +314,7 @@ test("only an administrator can reopen a completed placement with an audited rea
   assert.equal(
     (await coordinator.login(
       "coordinator.reopen@example.test",
-      "coordinator-replacement-2026",
+      coordinatorReplacementPassword,
     )).response.status,
     200,
   );
