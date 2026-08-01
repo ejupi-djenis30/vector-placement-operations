@@ -147,11 +147,24 @@ jobs:
           data_volume="vector-release-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           restore_volume="vector-release-restore-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           transfer="${RUNNER_TEMP}/vector-release-transfer"
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
           initialization_message="VECTOR initialization completed. Remove VECTOR_BOOTSTRAP_ADMIN_PASSWORD from the environment and restart VECTOR before serving users."
           retained_secret_message="VECTOR_BOOTSTRAP_ADMIN_PASSWORD must be removed after initialization. Remove it from the environment and restart VECTOR."
           cleanup() {
             docker rm --force "${container}" >/dev/null 2>&1 || true
             docker volume rm "${data_volume}" "${restore_volume}" >/dev/null 2>&1 || true
+            if [[ -d "${transfer}" ]] && docker image inspect "${image}" >/dev/null 2>&1; then
+              docker run --rm --read-only \
+                --network none \
+                --user root \
+                --cap-drop ALL \
+                --cap-add CHOWN \
+                --security-opt no-new-privileges:true \
+                --mount "type=bind,source=${transfer},target=/transfer" \
+                "${image}" \
+                chown -R "${runner_uid}:${runner_gid}" /transfer >/dev/null 2>&1 || true
+            fi
             docker image rm --force "${image}" >/dev/null 2>&1 || true
             rm -rf "${transfer}"
           }
@@ -280,8 +293,9 @@ jobs:
           docker cp --archive "${container}:/var/lib/vector/release-smoke.sqlite.manifest.json" "${transfer}/release-smoke.sqlite.manifest.json"
           [[ -f "${transfer}/release-smoke.sqlite" && ! -L "${transfer}/release-smoke.sqlite" ]]
           [[ -f "${transfer}/release-smoke.sqlite.manifest.json" && ! -L "${transfer}/release-smoke.sqlite.manifest.json" ]]
-          # docker cp ownership varies across daemon and user-namespace modes. Normalize only the
-          # two synthetic transfer files for the non-root image user with a one-capability helper.
+          # docker cp and bind-root ownership vary across daemon and user-namespace modes. Make the
+          # synthetic transfer boundary root-owned and its two files node-owned with one capability.
+          # The cleanup trap restores host-runner ownership before removing the temporary directory.
           docker run --rm --read-only \
             --network none \
             --user root \
@@ -290,9 +304,11 @@ jobs:
             --security-opt no-new-privileges:true \
             --mount "type=bind,source=${transfer},target=/transfer" \
             "${image}" \
-            chown node:node \
-              /transfer/release-smoke.sqlite \
-              /transfer/release-smoke.sqlite.manifest.json
+            sh -c 'chown root:root /transfer \
+              && chmod 0755 /transfer \
+              && chown node:node \
+                /transfer/release-smoke.sqlite \
+                /transfer/release-smoke.sqlite.manifest.json'
           docker run --rm --read-only \
             --tmpfs /tmp:rw,nodev,noexec,nosuid,size=32m \
             --cap-drop ALL \
