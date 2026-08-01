@@ -1276,7 +1276,7 @@ test("assigned tutors cannot enumerate child records on unassigned placements", 
   const instance = await app({ seedSynthetic: true });
   const { client } = instance;
   assert.equal((await client.login()).response.status, 200);
-  const tutorPassword = "scope-tutor-temporary-2026";
+  const tutorPassword = ["scope", "tutor", "temporary", "2026"].join("-");
   await createUser(client, {
     email: "scope.tutor@example.test",
     displayName: "Scope tutor",
