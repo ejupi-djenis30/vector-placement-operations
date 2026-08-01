@@ -62,7 +62,9 @@ export function closeHttpServer(server, {
       // after force-closing sockets. The grace deadline is an absolute bound.
       finish(forceError);
     }, graceMs);
-    forceClose.unref();
+    // Keep the absolute deadline referenced while shutdown is pending. An
+    // unreferenced timer can let Node exit with this promise unresolved when a
+    // server implementation has no sockets or other active handles.
     const closeNewlyIdleConnections = setInterval(
       () => {
         if (idleCloseError) return;
