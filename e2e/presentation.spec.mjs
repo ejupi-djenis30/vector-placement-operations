@@ -253,7 +253,7 @@ test("keeps presentation controls and surfaces distinct in forced-colors mode", 
 });
 
 for (const viewport of PUBLIC_VIEWPORTS) {
-  test(`resolves every publication colour and background layer at ${viewport.width}px`, async ({ page }) => {
+  test(`resolves every publication colour and background layer at ${viewport.width}x${viewport.height}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("./", { waitUntil: "domcontentloaded" });
 
@@ -324,7 +324,7 @@ test("detects responsive, per-instance and opaque-layer palette mutations", asyn
 });
 
 for (const viewport of PUBLIC_VIEWPORTS) {
-  test(`keeps the public presentation inside a ${viewport.width}px viewport`, async ({ page }) => {
+  test(`keeps the public presentation inside a ${viewport.width}x${viewport.height}px viewport`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("./", { waitUntil: "domcontentloaded" });
     await expect(page.locator("[data-api-status]")).toContainText("public product page");
