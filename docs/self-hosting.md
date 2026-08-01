@@ -464,12 +464,17 @@ training-agreement, attendance-log and evaluation records. Take and inspect a ba
 upgrade. After startup, verify that `VECTOR_DEFAULT` appears under **Programmes** and open one
 existing placement to confirm its programme and readiness information.
 
-VECTOR 3.3 adds a forward-only collection-index migration for stable student and host pagination
-at larger data volumes. It also introduces the derived **Coverage** view and defaults
+VECTOR 3.3 adds no database migration. It introduces the derived **Coverage** view and defaults
 `VECTOR_SESSION_IDLE_MINUTES` to `45` when the variable is absent. Before upgrading, confirm that
-the chosen inactivity limit is no greater than `VECTOR_SESSION_HOURS × 60`; after startup, verify
-student and host exports, a Coverage query and re-authentication after the institution's configured
-idle interval in a non-production rehearsal.
+the chosen inactivity limit is no greater than `VECTOR_SESSION_HOURS × 60`; after startup, verify a
+Coverage query and re-authentication after the institution's configured idle interval in a
+non-production rehearsal.
+
+VECTOR 3.4 applies forward-only migrations 003–006. They add stable collection indexes plus
+database backstops for per-placement activity capacity, the ten-active-session limit and the
+500-user school directory limit. Take and inspect a backup before upgrading; after startup, verify
+student and host pagination, placement activity, active-session rotation and the administrative
+user directory in a non-production rehearsal.
 
 ## Routine operations
 

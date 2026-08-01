@@ -4,6 +4,10 @@ Notable changes to VECTOR are recorded here.
 
 ## Unreleased
 
+- No unreleased changes.
+
+## 3.4.0 — 2026-08-01
+
 - Kept JSON inflation and parsing inside the metered `/api` boundary, rejected replaceable POSIX
   ancestors before creating backup destinations, enforced exact private backup-directory modes and
   covered the remaining legacy Windows DOS-device aliases used by `CLOCK$`, superscript-numbered

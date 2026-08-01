@@ -871,7 +871,7 @@ test("backup, manifest inspection and restore form a verified session-free round
   const created = cli("scripts/backup.mjs", ["--output", backup], environment);
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(readFileSync(`${backup}.manifest.json`, "utf8"));
-  assert.equal(manifest.appVersion, "3.3.0");
+  assert.equal(manifest.appVersion, "3.4.0");
   assert.equal(manifest.counts.sessions, 0);
   assert.equal(manifest.counts.programmes, 1);
   assert.equal(manifest.counts.programme_versions, 1);
@@ -1054,7 +1054,7 @@ test("backup, manifest inspection and restore form a verified session-free round
   writeFileSync(`${sessionBearing}.manifest.json`, `${JSON.stringify({
     formatVersion: 1,
     product: "VECTOR",
-    appVersion: "3.3.0",
+    appVersion: "3.4.0",
     createdAt: new Date().toISOString(),
     bytes: sessionStats.size,
     sha256: sha256File(sessionBearing),
