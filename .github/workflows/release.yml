@@ -160,6 +160,7 @@ jobs:
                 --user root \
                 --cap-drop ALL \
                 --cap-add CHOWN \
+                --cap-add DAC_READ_SEARCH \
                 --security-opt no-new-privileges:true \
                 --mount "type=bind,source=${transfer},target=/transfer" \
                 "${image}" \
@@ -294,7 +295,7 @@ jobs:
           [[ -f "${transfer}/release-smoke.sqlite" && ! -L "${transfer}/release-smoke.sqlite" ]]
           [[ -f "${transfer}/release-smoke.sqlite.manifest.json" && ! -L "${transfer}/release-smoke.sqlite.manifest.json" ]]
           # docker cp and bind-root ownership vary across daemon and user-namespace modes. Make the
-          # synthetic transfer boundary root-owned and its two files node-owned with one capability.
+          # synthetic transfer boundary private and node-owned together with its two files.
           # The cleanup trap restores host-runner ownership before removing the temporary directory.
           docker run --rm --read-only \
             --network none \
@@ -305,10 +306,11 @@ jobs:
             --mount "type=bind,source=${transfer},target=/transfer" \
             "${image}" \
             sh -c 'chown root:root /transfer \
-              && chmod 0755 /transfer \
+              && chmod 0700 /transfer \
               && chown node:node \
                 /transfer/release-smoke.sqlite \
-                /transfer/release-smoke.sqlite.manifest.json'
+                /transfer/release-smoke.sqlite.manifest.json \
+              && chown node:node /transfer'
           docker run --rm --read-only \
             --tmpfs /tmp:rw,nodev,noexec,nosuid,size=32m \
             --cap-drop ALL \

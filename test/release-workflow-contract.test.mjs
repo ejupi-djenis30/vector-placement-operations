@@ -43,8 +43,10 @@ test("release workflow keeps rehearsal, reproducibility, attestation and immutab
     "node scripts/backup.mjs",
     "docker cp --archive",
     "--cap-add CHOWN",
+    "--cap-add DAC_READ_SEARCH",
     "chown root:root /transfer",
     "chown node:node",
+    "chmod 0700 /transfer",
     'chown -R "${runner_uid}:${runner_gid}" /transfer',
     "node scripts/inspect-backup.mjs",
     "node scripts/restore.mjs",
@@ -85,8 +87,10 @@ test("release workflow keeps rehearsal, reproducibility, attestation and immutab
   assert.equal((workflow.match(/gpg\.ssh\.allowedSignersFile/g) ?? []).length, 1);
   assert.equal((workflow.match(/docker cp --archive/g) ?? []).length, 2);
   assert.equal((workflow.match(/--cap-add CHOWN/g) ?? []).length, 2);
-  assert.equal((workflow.match(/chown node:node/g) ?? []).length, 1);
+  assert.equal((workflow.match(/--cap-add DAC_READ_SEARCH/g) ?? []).length, 1);
   assert.equal((workflow.match(/chown root:root \/transfer/g) ?? []).length, 1);
+  assert.equal((workflow.match(/chown node:node/g) ?? []).length, 2);
+  assert.equal((workflow.match(/chmod 0700 \/transfer/g) ?? []).length, 1);
   assert.equal((workflow.match(/chown -R "\$\{runner_uid\}:\$\{runner_gid\}" \/transfer/g) ?? []).length, 1);
   assert.match(workflow, /--network none[\s\S]*--user root[\s\S]*--cap-drop ALL[\s\S]*--cap-add CHOWN/);
   assert.equal(workflow.includes("npm ci --ignore-scripts"), false);
