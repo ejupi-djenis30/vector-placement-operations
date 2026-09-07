@@ -709,7 +709,7 @@ for (const script of [
 assert(/Released under the \[MIT License\]\(LICENSE\)\./i.test(readme), "README must link the MIT license.");
 
 for (const token of [
-  "FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd",
+  "FROM node:24.18.1-alpine3.24@sha256:f70403e87646dc51b45295f4b8b70cdad0b63d2297c4c9899119b03f7af7a6b3",
   "npm ci --omit=dev --ignore-scripts --no-audit --no-fund",
   "node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --release --force_build=1",
   "rm -rf prebuilds",
@@ -735,7 +735,7 @@ for (const token of [
   assert(dockerfile.includes(token), `Dockerfile is missing ${token}`);
 }
 assert(
-  (dockerfile.match(/FROM node:24\.18\.0-alpine3\.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd/g) ?? []).length === 2,
+  (dockerfile.match(/FROM node:24\.18\.1-alpine3\.24@sha256:f70403e87646dc51b45295f4b8b70cdad0b63d2297c4c9899119b03f7af7a6b3/g) ?? []).length === 2,
   "Both Docker stages must pin the same Node 24 LTS multi-architecture digest.",
 );
 for (const token of [

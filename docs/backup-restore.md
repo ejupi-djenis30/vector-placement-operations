@@ -22,6 +22,9 @@ application-consistent SQLite snapshot.
 
 Choose a unique output filename on the persistent volume:
 
+Operator commands accept both `--output PATH` and `--output=PATH` (likewise `--file`).
+Quote paths that contain spaces; any equals signs inside the path are preserved literally.
+
 ```sh
 docker compose exec vector node scripts/backup.mjs \
   --output /var/lib/vector/vector-backup-YYYYMMDD-HHMMSS.sqlite

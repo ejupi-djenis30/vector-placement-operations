@@ -75,7 +75,7 @@ test("the production image compiles its SQLite addon against the pinned runtime 
     /npm ci --omit=dev --ignore-scripts --no-audit --no-fund\s+&& cd node_modules\/better-sqlite3\s+&& node \/usr\/local\/lib\/node_modules\/npm\/node_modules\/node-gyp\/bin\/node-gyp\.js rebuild --release --force_build=1\s+&& rm -rf prebuilds\s+&& cd \/app/,
   );
   assert.equal(
-    (dockerfile.match(/FROM node:24\.18\.0-alpine3\.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd/g) ?? []).length,
+    (dockerfile.match(/FROM node:24\.18\.1-alpine3\.24@sha256:f70403e87646dc51b45295f4b8b70cdad0b63d2297c4c9899119b03f7af7a6b3/g) ?? []).length,
     2,
   );
   assert.match(normalized, /apk add --no-cache g\+\+ make python3/);

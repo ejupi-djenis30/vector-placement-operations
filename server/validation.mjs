@@ -25,7 +25,7 @@ export function assertDateRange(startDate, endDate) {
 export function hoursToMinutes(hours) {
   const value = Number(hours);
   const minutes = Math.round(value * 60);
-  if (!Number.isFinite(value) || value <= 0 || minutes > 120_000) {
+  if (!Number.isFinite(value) || value <= 0 || minutes < 1 || minutes > 120_000) {
     throw new AppError(422, "invalid_hours", "Hours must be greater than zero.");
   }
   if (Math.abs(value * 60 - minutes) > 0.000001) {

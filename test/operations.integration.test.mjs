@@ -838,7 +838,7 @@ test("production error logs correlate request IDs without leaking queries, cooki
 test("backup, manifest inspection and restore form a verified session-free round trip", async () => {
   const root = temporaryRoot();
   const source = path.join(root, "source.sqlite");
-  const backup = path.join(root, "backup.sqlite");
+  const backup = path.join(root, "school=alpha=backup.sqlite");
   const restored = path.join(root, "restored.sqlite");
   const instance = await startTestApp({ databasePath: source, seedSynthetic: true });
   apps.add(instance);
@@ -868,7 +868,7 @@ test("backup, manifest inspection and restore form a verified session-free round
   assert.equal(existsSync(reservedOutput), false);
   assert.equal(existsSync(`${reservedOutput}.manifest.json`), false);
 
-  const created = cli("scripts/backup.mjs", ["--output", backup], environment);
+  const created = cli("scripts/backup.mjs", [`--output=${backup}`], environment);
   assert.equal(created.status, 0, created.stderr);
   const manifest = JSON.parse(readFileSync(`${backup}.manifest.json`, "utf8"));
   assert.equal(manifest.appVersion, "3.4.0");
@@ -883,7 +883,7 @@ test("backup, manifest inspection and restore form a verified session-free round
   assert.equal(existsSync(`${backup}-wal`), false);
   assert.equal(existsSync(`${backup}-shm`), false);
 
-  const inspected = cli("scripts/inspect-backup.mjs", ["--file", backup], environment);
+  const inspected = cli("scripts/inspect-backup.mjs", [`--file=${backup}`], environment);
   assert.equal(inspected.status, 0, inspected.stderr);
 
   const hardLinkedBackup = path.join(root, "hard-linked-backup.sqlite");
