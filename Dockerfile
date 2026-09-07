@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS dependencies
+FROM node:24.18.1-alpine3.24@sha256:f70403e87646dc51b45295f4b8b70cdad0b63d2297c4c9899119b03f7af7a6b3 AS dependencies
 
 WORKDIR /app
 
-RUN apk add --no-cache g++ make python3
+RUN apk upgrade --no-cache \
+    && apk add --no-cache g++ make python3
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
@@ -14,7 +15,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && cd /app \
     && npm cache clean --force
 
-FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS runtime
+FROM node:24.18.1-alpine3.24@sha256:f70403e87646dc51b45295f4b8b70cdad0b63d2297c4c9899119b03f7af7a6b3 AS runtime
 
 ARG VECTOR_BUILD_REVISION=unknown
 
@@ -30,7 +31,9 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-RUN rm -rf \
+# Refresh Alpine security patches before the image is scanned and published.
+RUN apk upgrade --no-cache \
+    && rm -rf \
       /usr/local/lib/node_modules/npm \
       /usr/local/lib/node_modules/corepack \
       /opt/yarn-v1.22.22 \

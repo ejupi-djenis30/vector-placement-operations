@@ -9,7 +9,9 @@ export function parseArgs(
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token.startsWith("--")) throw new Error(`Unexpected argument: ${token}`);
-    const [rawKey, inlineValue] = token.slice(2).split("=", 2);
+    const separator = token.indexOf("=");
+    const rawKey = token.slice(2, separator === -1 ? undefined : separator);
+    const inlineValue = separator === -1 ? undefined : token.slice(separator + 1);
     if (!rawKey) throw new Error("Argument names cannot be empty.");
     if (!knownKeys.has(rawKey)) throw new Error(`Unknown argument: --${rawKey}`);
     if (Object.hasOwn(result, rawKey)) throw new Error(`Duplicate argument: --${rawKey}`);

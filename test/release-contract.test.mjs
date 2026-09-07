@@ -65,7 +65,7 @@ test("published release notes stay immutable while later work remains Unreleased
     /^## Unreleased\n\n([\s\S]*?)(?=^## )/m,
   );
   assert.ok(unreleased, "CHANGELOG.md must retain its Unreleased section.");
-  assert.equal(unreleased[1].trim(), "- No unreleased changes.");
+  assert.match(unreleased[1].trim(), /^- \S/m, "Unreleased must contain notes or its empty-state bullet.");
 });
 
 test("release inputs reject untracked environment, database, backup and oversized content", () => {

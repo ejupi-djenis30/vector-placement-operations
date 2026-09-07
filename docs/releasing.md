@@ -48,6 +48,11 @@ image secret finding, and upload a CycloneDX container SBOM. The vulnerability d
 deliberately refreshed rather than frozen: executable tooling is reproducible, while the gate must
 reflect disclosures available at the time of the run.
 
+The Node/Alpine base is digest-pinned, while both Docker build stages install current security
+updates from the selected Alpine release repositories. Rebuild with `--no-cache` when rechecking
+an older candidate so a cached package-update layer cannot conceal newer fixes. The container
+SBOM records the package versions actually shipped; the final image must pass the full scans above.
+
 ## Build and compare candidates
 
 ```bash

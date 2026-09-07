@@ -4,7 +4,15 @@ Notable changes to VECTOR are recorded here.
 
 ## Unreleased
 
-- No unreleased changes.
+- Refreshed the digest-pinned container to Node 24.18.1 and enabled Alpine security updates
+  in both build stages to install the OpenSSL fix for CVE-2026-14456. Image vulnerability
+  and secret scans remain required before release.
+- Updated the locked `ip-address` and `qs` dependencies to compatible versions that address
+  their reported input-validation and denial-of-service advisories.
+- Preserved equals signs inside inline CLI values so backup/restore paths and user attributes
+  are not silently truncated.
+- Rejected positive hour values that round to zero minutes before database writes, returning
+  the existing validation error instead of a SQLite constraint failure.
 
 ## 3.4.0 — 2026-08-01
 
